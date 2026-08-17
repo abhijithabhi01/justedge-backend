@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hearth — Admin API</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0f1a;
+    --panel:#0f1626;
+    --panel-2:#121b30;
+    --border:#1e2942;
+    --text:#e7ecf5;
+    --text-dim:#7c879e;
+    --text-dimmer:#4e586e;
+    --cyan:#4fd8c4;
+    --amber:#f0a93e;
+    --red:#f0555b;
+    --mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+    --sans: 'Inter', -apple-system, sans-serif;
+    --display: 'Space Grotesk', var(--sans);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:
+      radial-gradient(1100px 600px at 12% -10%, rgba(79,216,196,0.08), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, rgba(240,169,62,0.05), transparent 55%),
+      var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:inherit;}
+  .wrap{
+    max-width:920px;
+    margin:0 auto;
+    padding:56px 24px 80px;
+  }
+  @media (prefers-reduced-motion: reduce){
+    *{animation-duration:0.01ms !important; animation-iteration-count:1 !important; transition-duration:0.01ms !important;}
+  }
+
+  /* ---- top bar ---- */
+  .topbar{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    margin-bottom:40px;
+  }
+  .brand{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    font-family:var(--display);
+    font-weight:600;
+    font-size:15px;
+    letter-spacing:0.02em;
+    color:var(--text-dim);
+  }
+  .brand .flame{
+    width:8px;height:8px;border-radius:2px;
+    background:var(--cyan);
+    box-shadow:0 0 12px rgba(79,216,196,0.7);
+  }
+  .brand b{color:var(--text); font-weight:600;}
+  .clock{
+    font-family:var(--mono);
+    font-size:12px;
+    color:var(--text-dimmer);
+    letter-spacing:0.03em;
+  }
+
+  /* ---- hero ---- */
+  .hero{
+    border:1px solid var(--border);
+    background:linear-gradient(180deg, var(--panel), var(--panel-2));
+    border-radius:14px;
+    padding:32px 32px 26px;
+    position:relative;
+    overflow:hidden;
+  }
+  .hero::before{
+    content:"";
+    position:absolute; inset:0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size:28px 28px;
+    mask-image:radial-gradient(600px 260px at 20% 0%, black, transparent 75%);
+    pointer-events:none;
+  }
+  .status-row{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    font-family:var(--mono);
+    font-size:12px;
+    letter-spacing:0.08em;
+    text-transform:uppercase;
+    color:var(--cyan);
+    position:relative;
+    z-index:1;
+  }
+  .dot{
+    width:7px;height:7px;border-radius:50%;
+    background:var(--cyan);
+    box-shadow:0 0 0 3px rgba(79,216,196,0.15);
+    animation:blink 2.2s ease-in-out infinite;
+  }
+  .dot.down{background:var(--red); box-shadow:0 0 0 3px rgba(240,85,91,0.15);}
+  @keyframes blink{
+    0%,100%{opacity:1;}
+    50%{opacity:0.35;}
+  }
+  h1{
+    font-family:var(--display);
+    font-weight:700;
+    font-size:clamp(28px, 4vw, 40px);
+    letter-spacing:-0.01em;
+    margin:14px 0 6px;
+    position:relative; z-index:1;
+  }
+  .sub{
+    color:var(--text-dim);
+    font-size:14.5px;
+    max-width:52ch;
+    line-height:1.55;
+    margin:0 0 22px;
+    position:relative; z-index:1;
+  }
+  .sub code{
+    font-family:var(--mono);
+    background:rgba(255,255,255,0.06);
+    padding:1px 6px;
+    border-radius:4px;
+    font-size:13px;
+  }
+
+  /* ---- status banner ---- */
+  .status-banner{
+    position:relative; z-index:1;
+    display:flex;
+    align-items:center;
+    gap:14px;
+    padding:16px 18px;
+    margin-bottom:22px;
+    border:1px solid rgba(79,216,196,0.25);
+    border-radius:10px;
+    background:linear-gradient(180deg, rgba(79,216,196,0.09), rgba(79,216,196,0.03));
+  }
+  .status-banner .badge-icon{
+    flex:none;
+    width:34px;height:34px;
+    border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    background:rgba(79,216,196,0.12);
+    box-shadow:0 0 0 1px rgba(79,216,196,0.3), 0 0 18px rgba(79,216,196,0.25);
+  }
+  .status-banner .badge-icon svg{width:16px;height:16px;}
+  .status-banner .badge-icon .ring{
+    position:absolute;
+    width:34px;height:34px;
+    border-radius:50%;
+    border:1px solid rgba(79,216,196,0.5);
+    animation:ringPulse 2.4s ease-out infinite;
+  }
+  @keyframes ringPulse{
+    0%{transform:scale(1); opacity:0.6;}
+    100%{transform:scale(1.6); opacity:0;}
+  }
+  .status-banner .badge-text{flex:1; min-width:0;}
+  .status-banner .badge-title{
+    font-family:var(--display);
+    font-weight:600;
+    font-size:14.5px;
+    color:var(--text);
+  }
+  .status-banner .badge-sub{
+    font-family:var(--mono);
+    font-size:11.5px;
+    color:var(--text-dim);
+    margin-top:2px;
+  }
+  .status-banner .badge-meta{
+    flex:none;
+    text-align:right;
+    font-family:var(--mono);
+    font-size:11px;
+    color:var(--text-dimmer);
+  }
+  .status-banner .badge-meta .latency{
+    color:var(--cyan);
+    font-weight:600;
+  }
+  .status-banner.is-down{
+    border-color:rgba(240,85,91,0.3);
+    background:linear-gradient(180deg, rgba(240,85,91,0.09), rgba(240,85,91,0.03));
+  }
+  .status-banner.is-down .badge-icon{
+    background:rgba(240,85,91,0.12);
+    box-shadow:0 0 0 1px rgba(240,85,91,0.3), 0 0 18px rgba(240,85,91,0.25);
+  }
+  .status-banner.is-down .badge-icon .ring{border-color:rgba(240,85,91,0.5);}
+  .status-banner.is-down .badge-meta .latency{color:var(--red);}
+  @media (max-width:560px){
+    .status-banner{flex-wrap:wrap;}
+    .status-banner .badge-meta{text-align:left; width:100%; padding-left:48px;}
+  }
+
+  .metrics{
+    position:relative; z-index:1;
+    display:grid;
+    grid-template-columns:repeat(4, 1fr);
+    gap:1px;
+    background:var(--border);
+    border:1px solid var(--border);
+    border-radius:10px;
+    overflow:hidden;
+  }
+  .metric{
+    background:var(--panel);
+    padding:14px 16px;
+  }
+  .metric .k{
+    font-family:var(--mono);
+    font-size:10.5px;
+    letter-spacing:0.08em;
+    text-transform:uppercase;
+    color:var(--text-dimmer);
+    margin-bottom:6px;
+  }
+  .metric .v{
+    font-family:var(--mono);
+    font-size:16px;
+    font-weight:500;
+    color:var(--text);
+  }
+  .metric .v.small{font-size:13px; color:var(--text-dim);}
+  @media (max-width:640px){
+    .metrics{grid-template-columns:repeat(2,1fr);}
+  }
+
+  /* ---- manifest ---- */
+  .section-label{
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:0.1em;
+    text-transform:uppercase;
+    color:var(--text-dimmer);
+    margin:44px 0 12px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+  }
+  .section-label::after{
+    content:"";
+    flex:1;
+    height:1px;
+    background:var(--border);
+  }
+  .manifest{
+    border:1px solid var(--border);
+    border-radius:10px;
+    overflow:hidden;
+  }
+  .group{
+    border-bottom:1px solid var(--border);
+  }
+  .group:last-child{border-bottom:none;}
+  .group-head{
+    padding:10px 16px;
+    background:var(--panel-2);
+    font-family:var(--mono);
+    font-size:11px;
+    letter-spacing:0.06em;
+    text-transform:uppercase;
+    color:var(--text-dim);
+  }
+  .route{
+    display:flex;
+    align-items:baseline;
+    gap:12px;
+    padding:10px 16px;
+    background:var(--panel);
+    font-family:var(--mono);
+    font-size:12.5px;
+    border-top:1px solid var(--border);
+  }
+  .route .m{
+    color:var(--cyan);
+    width:44px;
+    flex:none;
+    font-weight:600;
+  }
+  .route .m.post{color:var(--amber);}
+  .route .m.patch{color:#8a9dfa;}
+  .route .m.delete{color:var(--red);}
+  .route .p{color:var(--text); flex:1; min-width:0; overflow-wrap:anywhere;}
+  .route .n{color:var(--text-dimmer); font-family:var(--sans); font-size:12px;}
+  @media (max-width:640px){
+    .route{flex-wrap:wrap;}
+    .route .n{width:100%;}
+  }
+
+  footer{
+    margin-top:44px;
+    display:flex;
+    justify-content:space-between;
+    flex-wrap:wrap;
+    gap:8px;
+    color:var(--text-dimmer);
+    font-family:var(--mono);
+    font-size:11px;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+
+    <div class="topbar">
+      <div class="brand"><span class="flame"></span><b>Hearth</b></div>
+      <div class="clock" id="clock">--:--:--</div>
+    </div>
+
+    <div class="hero">
+      <div class="status-row">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">Checking status…</span>
+      </div>
+      <h1>Server is running.</h1>
+
+      <div class="status-banner" id="statusBanner">
+        <div class="badge-icon">
+          <span class="ring" id="badgeRing"></span>
+          <svg viewBox="0 0 24 24" fill="none" id="badgeIcon">
+            <path d="M5 13l4 4L19 7" stroke="#4fd8c4" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div class="badge-text">
+          <div class="badge-title" id="badgeTitle">All systems operational</div>
+          <div class="badge-sub" id="badgeSub">Health checks passing on this instance</div>
+        </div>
+        <div class="badge-meta">
+          <div><span class="latency" id="badgeLatency">—</span></div>
+          <div id="badgeChecked">checked just now</div>
+        </div>
+      </div>
+
+      <div class="metrics">
+        <div class="metric"><div class="k">Uptime</div><div class="v" id="mUptime">—</div></div>
+        <div class="metric"><div class="k">Environment</div><div class="v small" id="mEnv">—</div></div>
+        <div class="metric"><div class="k">Database</div><div class="v small" id="mDb">—</div></div>
+        <div class="metric"><div class="k">Node</div><div class="v small" id="mNode">—</div></div>
+      </div>
+    </div>
+
+  
+
+    <footer>
+      <span id="fPort">—</span>
+      <span>Hearth</span>
+    </footer>
+  </div>
+
+<script>
+  function tick(){
+    document.getElementById('clock').textContent = new Date().toLocaleTimeString();
+  }
+  tick();
+  setInterval(tick, 1000);
+
+  function fmtUptime(sec){
+    sec = Math.floor(sec);
+    const d = Math.floor(sec/86400); sec %= 86400;
+    const h = Math.floor(sec/3600); sec %= 3600;
+    const m = Math.floor(sec/60); sec %= 60;
+    const parts = [];
+    if(d) parts.push(d+'d');
+    if(h || d) parts.push(h+'h');
+    parts.push(m+'m');
+    parts.push(sec+'s');
+    return parts.join(' ');
+  }
+
+  const dot = document.getElementById('statusDot');
+  const text = document.getElementById('statusText');
+  const banner = document.getElementById('statusBanner');
+  const badgeIconPath = document.querySelector('#badgeIcon path');
+  const badgeTitle = document.getElementById('badgeTitle');
+  const badgeSub = document.getElementById('badgeSub');
+  const badgeLatency = document.getElementById('badgeLatency');
+  const badgeChecked = document.getElementById('badgeChecked');
+
+  async function poll(){
+    try{
+      const start = performance.now();
+      const res = await fetch('/health', {cache:'no-store'});
+      const latency = Math.round(performance.now() - start);
+      if(!res.ok) throw new Error('bad status');
+      const data = await res.json();
+
+      dot.classList.remove('down');
+      text.textContent = `Operational — ${latency}ms`;
+
+      banner.classList.remove('is-down');
+      badgeIconPath.setAttribute('d', 'M5 13l4 4L19 7');
+      badgeIconPath.setAttribute('stroke', '#4fd8c4');
+      badgeTitle.textContent = 'All systems operational';
+      badgeSub.textContent = `Health checks passing on this instance · ${(data.db && data.db.state) || 'db unknown'}`;
+      badgeLatency.textContent = latency + 'ms';
+      badgeChecked.textContent = 'checked just now';
+
+      document.getElementById('mUptime').textContent = fmtUptime(data.uptime || 0);
+      document.getElementById('mEnv').textContent = data.env || 'unknown';
+      document.getElementById('mNode').textContent = data.node || '—';
+      document.getElementById('fPort').textContent = 'port ' + (data.port || '—');
+
+      const dbEl = document.getElementById('mDb');
+      const dbState = data.db && data.db.state;
+      dbEl.textContent = dbState ? dbState : 'unknown';
+
+    }catch(err){
+      dot.classList.add('down');
+      text.textContent = 'Unreachable — retrying…';
+
+      banner.classList.add('is-down');
+      badgeIconPath.setAttribute('d', 'M12 8v5M12 16h.01M10.3 3.9L2.7 17a2 2 0 001.7 3h15.2a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z');
+      badgeIconPath.setAttribute('stroke', '#f0555b');
+      badgeTitle.textContent = 'Connection lost';
+      badgeSub.textContent = 'Retrying health check…';
+      badgeLatency.textContent = '—';
+      badgeChecked.textContent = 'last check failed';
+    }
+  }
+  poll();
+  setInterval(poll, 5000);
+</script>
+</body>
+</html>

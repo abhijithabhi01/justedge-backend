@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hearth — Live Sensor</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px;
+    }
+
+    header {
+      width: 100%;
+      max-width: 700px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 32px;
+    }
+
+    header h1 { font-size: 1.3rem; font-weight: 600; color: #f1f5f9; }
+    header h1 span { color: #f97316; }
+
+    .pill {
+      font-size: 0.72rem;
+      padding: 4px 10px;
+      border-radius: 99px;
+      background: #1e2330;
+      color: #94a3b8;
+    }
+    .pill.live { background: #052e16; color: #4ade80; }
+
+    /* ── Device selector ── */
+    .selector {
+      width: 100%;
+      max-width: 700px;
+      display: flex;
+      gap: 10px;
+      margin-bottom: 28px;
+    }
+    .selector input {
+      flex: 1;
+      background: #1e2330;
+      border: 1px solid #2d3748;
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: #e2e8f0;
+      font-size: 0.9rem;
+      outline: none;
+    }
+    .selector input:focus { border-color: #f97316; }
+    .selector button {
+      background: #f97316;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 20px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .selector button:hover { background: #ea6d0e; }
+
+    /* ── Big temp card ── */
+    .card {
+      width: 100%;
+      max-width: 700px;
+      background: #1a1f2e;
+      border: 1px solid #2d3748;
+      border-radius: 16px;
+      padding: 36px 32px;
+      margin-bottom: 24px;
+      text-align: center;
+    }
+
+    .device-label {
+      font-size: 0.85rem;
+      color: #64748b;
+      margin-bottom: 8px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .temp-big {
+      font-size: 5rem;
+      font-weight: 700;
+      line-height: 1;
+      color: #f97316;
+      margin: 12px 0;
+      transition: color 0.3s;
+    }
+    .temp-big.hot  { color: #ef4444; }
+    .temp-big.warm { color: #f97316; }
+    .temp-big.cool { color: #38bdf8; }
+
+    .recorded-at {
+      font-size: 0.8rem;
+      color: #475569;
+      margin-top: 10px;
+    }
+
+    .status-row {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      margin-top: 20px;
+      font-size: 0.8rem;
+      color: #64748b;
+    }
+    .status-row span b { color: #94a3b8; }
+
+    /* ── History log ── */
+    .log-header {
+      width: 100%;
+      max-width: 700px;
+      font-size: 0.8rem;
+      color: #64748b;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .log {
+      width: 100%;
+      max-width: 700px;
+      background: #1a1f2e;
+      border: 1px solid #2d3748;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .log-row {
+      display: grid;
+      grid-template-columns: 1fr 100px 180px;
+      padding: 10px 18px;
+      border-bottom: 1px solid #1e2330;
+      font-size: 0.82rem;
+      align-items: center;
+      animation: fadeIn 0.3s ease;
+    }
+    .log-row:last-child { border-bottom: none; }
+    .log-row:first-child { background: #1e2a1e; }  /* highlight newest */
+
+    .log-row .t { color: #4ade80; font-weight: 600; }
+    .log-row .ts { color: #64748b; font-size: 0.75rem; text-align: right; }
+    .log-row .idx { color: #334155; }
+
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; } }
+
+    .error-box {
+      width: 100%;
+      max-width: 700px;
+      background: #1a0a0a;
+      border: 1px solid #7f1d1d;
+      border-radius: 10px;
+      padding: 14px 18px;
+      color: #fca5a5;
+      font-size: 0.85rem;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Hearth <span>IoT</span> Monitor</h1>
+  <span class="pill live" id="status-pill">● CONNECTING</span>
+</header>
+
+<div class="selector">
+  <input id="device-input" type="text" value="Susima_IoT1" placeholder="Device ID" />
+  <button onclick="start()">Watch</button>
+</div>
+
+<div class="card">
+  <div class="device-label" id="device-label">—</div>
+  <div class="temp-big" id="temp-display">—</div>
+  <div style="color:#64748b;font-size:0.9rem;">°C</div>
+  <div class="recorded-at" id="recorded-at">—</div>
+  <div class="status-row">
+    <span>Polls <b>every 5s</b></span>
+    <span>Last fetch: <b id="last-fetch">—</b></span>
+    <span>Updates: <b id="update-count">0</b></span>
+  </div>
+</div>
+
+<div class="error-box" id="error-box"></div>
+
+<div class="log-header">Recent readings</div>
+<div class="log" id="log"></div>
+
+<script>
+  let deviceId   = 'Susima_IoT1';
+  let interval   = null;
+  let updateCount = 0;
+  let lastTs     = null;
+  const MAX_LOG  = 20;
+
+  function start() {
+    deviceId = document.getElementById('device-input').value.trim() || 'Susima_IoT1';
+    document.getElementById('device-label').textContent = deviceId;
+    document.getElementById('log').innerHTML = '';
+    updateCount = 0;
+    lastTs = null;
+    clearInterval(interval);
+    fetchLatest();
+    interval = setInterval(fetchLatest, 5000);
+  }
+
+  async function fetchLatest() {
+    try {
+      const res  = await fetch(`/api/iot/ui/live/${encodeURIComponent(deviceId)}`);
+      const data = await res.json();
+
+      if (!res.ok) { showError(data.error); return; }
+      hideError();
+
+      document.getElementById('last-fetch').textContent = new Date().toLocaleTimeString('en-IN');
+      document.getElementById('status-pill').textContent = '● LIVE';
+
+      const temp = data.temperature ?? '—';
+      const el   = document.getElementById('temp-display');
+      el.textContent = temp;
+      el.className   = 'temp-big ' + tempClass(temp);
+
+      const ts = data.recordedAt ? new Date(data.recordedAt).toLocaleString('en-IN') : '—';
+      document.getElementById('recorded-at').textContent = 'Recorded: ' + ts;
+
+      // only log if it's a new reading
+      if (data.timestamp !== lastTs) {
+        lastTs = data.timestamp;
+        updateCount++;
+        document.getElementById('update-count').textContent = updateCount;
+        addLogRow(temp, ts);
+      }
+
+    } catch (err) {
+      showError('Fetch failed: ' + err.message);
+    }
+  }
+
+  function addLogRow(temp, ts) {
+    const log = document.getElementById('log');
+    const row = document.createElement('div');
+    row.className = 'log-row';
+    row.innerHTML = `
+      <span class="idx">#${updateCount}</span>
+      <span class="t">${temp}°C</span>
+      <span class="ts">${ts}</span>
+    `;
+    log.insertBefore(row, log.firstChild);
+    // cap log length
+    while (log.children.length > MAX_LOG) log.removeChild(log.lastChild);
+  }
+
+  function tempClass(t) {
+    if (t === '—') return '';
+    return t >= 35 ? 'hot' : t >= 28 ? 'warm' : 'cool';
+  }
+
+  function showError(msg) {
+    const b = document.getElementById('error-box');
+    b.textContent = '⚠ ' + msg;
+    b.style.display = 'block';
+    document.getElementById('status-pill').textContent = '● ERROR';
+    document.getElementById('status-pill').className = 'pill';
+  }
+
+  function hideError() {
+    document.getElementById('error-box').style.display = 'none';
+  }
+
+  // auto-start
+  start();
+</script>
+</body>
+</html>
