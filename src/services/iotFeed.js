@@ -1,6 +1,6 @@
 /**
- * iotFeed.js — reads live sensor data from DynamoDB (IoT team's tables).
- * Supports multiple boards/tables so the live UI can show every sensor at once.
+ * iotFeed.js — reads live sensor data from DynamoDB (IoT team's table).
+ * All boards share the same table (SensorData); they are distinguished by deviceId.
  */
 
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
@@ -17,105 +17,71 @@ const client = DynamoDBDocumentClient.from(
   { unmarshallOptions: { wrapNumbers: false } }
 );
 
-const DEFAULT_TABLE = process.env.DYNAMODB_TABLE_NAME || 'SensorData';
+const TABLE = process.env.DYNAMODB_TABLE_NAME || 'SensorData';
 
 /**
- * Known boards → DynamoDB table mapping.
- * Susima_IoT1 uses the default SensorData table; the other boards each have
- * their own table (names taken from the AWS console).
+ * Known boards — all live in the same SensorData table, keyed by deviceId.
+ * deviceId values match what the IoT devices write into DynamoDB.
  */
 export const BOARDS = [
-  { deviceId: 'Susima_IoT1', table: DEFAULT_TABLE,    label: 'Susima IoT 1' },
-  { deviceId: 'DynamoDB_2',  table: 'DynamoDB_2',     label: 'DynamoDB 2' },
-  { deviceId: 'DynamoDB_3',  table: 'DynamoDB_3',     label: 'DynamoDB 3' },
-  { deviceId: 'DynamoDB_4',  table: 'DynamoDB_4',     label: 'DynamoDB 4' },
+  { deviceId: 'Susima_IoT1', label: 'Susima IoT 1' },
+  { deviceId: 'DynamoDB_2',  label: 'DynamoDB 2' },
+  { deviceId: 'DynamoDB_3',  label: 'DynamoDB 3' },
+  { deviceId: 'DynamoDB_4',  label: 'DynamoDB 4' },
 ];
 
 /**
- * Latest reading for a single device from a specific table.
- * Tries Query on deviceId first; falls back to a limited Scan if the table
- * has a different key schema (common for single-device tables).
+ * Latest reading for a single device (Query on deviceId, newest first).
  */
-export async function getLatestReading(deviceId, tableName = DEFAULT_TABLE) {
+export async function getLatestReading(deviceId) {
   try {
     const res = await client.send(new QueryCommand({
-      TableName:                 tableName,
+      TableName:                 TABLE,
       KeyConditionExpression:    'deviceId = :did',
       ExpressionAttributeValues: { ':did': deviceId },
       ScanIndexForward:          false,   // newest first
       Limit:                     1,
     }));
-    if (res.Items?.[0]) return res.Items[0];
+    return res.Items?.[0] ?? null;
   } catch (err) {
-    // Table may not have deviceId as PK — fall through to Scan
-    if (err.name !== 'ValidationException' && err.name !== 'ResourceNotFoundException') {
-      console.warn(`[iotFeed] Query failed for ${deviceId}@${tableName}:`, err.message);
-    }
-  }
-
-  // Fallback: scan the table and pick the item with the newest timestamp
-  try {
-    const res = await client.send(new ScanCommand({
-      TableName: tableName,
-      Limit:     25,
-    }));
-    const items = res.Items || [];
-    if (!items.length) return null;
-    items.sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
-    return items[0];
-  } catch (err) {
-    console.error(`[iotFeed] Scan failed for ${tableName}:`, err.message);
+    console.error(`[iotFeed] getLatestReading(${deviceId}) error:`, err.message);
     return null;
   }
 }
 
 /**
- * Latest N readings for a single device (for sparkline / history).
+ * Latest N readings for a single device (for history / sparkline).
  */
-export async function getRecentReadings(deviceId, limit = 20, tableName = DEFAULT_TABLE) {
+export async function getRecentReadings(deviceId, limit = 20) {
   try {
     const res = await client.send(new QueryCommand({
-      TableName:                 tableName,
+      TableName:                 TABLE,
       KeyConditionExpression:    'deviceId = :did',
       ExpressionAttributeValues: { ':did': deviceId },
       ScanIndexForward:          false,
       Limit:                     limit,
     }));
-    if (res.Items?.length) return res.Items;
-  } catch (_) { /* fall through */ }
-
-  try {
-    const res = await client.send(new ScanCommand({
-      TableName: tableName,
-      Limit:     Math.min(limit * 2, 50),
-    }));
-    const items = (res.Items || []).sort(
-      (a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0)
-    );
-    return items.slice(0, limit);
+    return res.Items ?? [];
   } catch (err) {
-    console.error(`[iotFeed] getRecentReadings failed:`, err.message);
+    console.error(`[iotFeed] getRecentReadings(${deviceId}) error:`, err.message);
     return [];
   }
 }
 
 /**
- * Latest reading for every known board (parallel).
- * Returns an array of normalised objects (or null entries when a board has no data).
+ * Latest reading for every known board (parallel queries against the same table).
  */
 export async function getAllBoardReadings() {
   const results = await Promise.all(
     BOARDS.map(async (board) => {
-      const item = await getLatestReading(board.deviceId, board.table);
+      const item = await getLatestReading(board.deviceId);
       const normalised = normalise(item);
       if (normalised) {
         normalised.label = board.label;
-        normalised.table = board.table;
       }
       return {
         deviceId: board.deviceId,
         label:    board.label,
-        table:    board.table,
         reading:  normalised,
       };
     })
@@ -124,11 +90,12 @@ export async function getAllBoardReadings() {
 }
 
 /**
- * Latest reading across ALL devices in the default table (legacy helper).
+ * Latest reading across ALL devices (one scan — legacy helper).
+ * Prefer per-device queries on large tables.
  */
 export async function getAllLatestReadings(limit = 50) {
   const res = await client.send(new ScanCommand({
-    TableName: DEFAULT_TABLE,
+    TableName: TABLE,
     Limit:     limit,
   }));
   return res.Items ?? [];
