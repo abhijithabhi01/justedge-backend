@@ -1,4 +1,4 @@
-\import { Router } from 'express';
+import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { liveAll, liveOne, history } from '../controllers/iotController.js';
 import {
