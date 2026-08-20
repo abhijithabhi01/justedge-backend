@@ -208,6 +208,7 @@
   let updateCount = 0;
   let lastTsMap   = {};   // deviceId → last timestamp seen
   const MAX_LOG   = 30;
+  const OFFLINE_AFTER_MS = 11 * 1000; // mark offline if no new ping for 11s
 
   // ── Build empty cards ────────────────────────────────────────────────────
   function renderCards() {
@@ -256,6 +257,8 @@
       }
 
       let anyNew = false;
+      const nowMs = Date.now();
+
       for (const entry of (data.boards || [])) {
         const id      = entry.deviceId;
         const reading = entry.reading;
@@ -265,7 +268,21 @@
         const stEl    = document.getElementById('st-' + id);
         if (!card || !tempEl) continue;
 
-        if (reading && reading.temperature != null) {
+        // Age of the latest reading (ms). Prefer recordedAt, fall back to timestamp (unix sec).
+        let ageMs = Infinity;
+        if (reading) {
+          if (reading.recordedAt) {
+            ageMs = nowMs - new Date(reading.recordedAt).getTime();
+          } else if (reading.timestamp != null) {
+            ageMs = nowMs - (Number(reading.timestamp) * 1000);
+          }
+        }
+
+        const isStale = ageMs > OFFLINE_AFTER_MS;
+        const hasTemp = reading && reading.temperature != null;
+
+        if (hasTemp && !isStale) {
+          // Fresh data — online
           card.className = 'card has-data';
           const t = reading.temperature;
           tempEl.textContent = t;
@@ -275,7 +292,7 @@
             ? new Date(reading.recordedAt).toLocaleString('en-IN')
             : '—';
           recEl.textContent = 'Recorded: ' + ts;
-          stEl.innerHTML = '<span class="ok">● data</span>';
+          stEl.innerHTML = '<span class="ok">● online</span>';
 
           // log only when this board produces a new timestamp
           if (reading.timestamp !== lastTsMap[id]) {
@@ -283,12 +300,26 @@
             anyNew = true;
             addLogRow(entry.label || id, t, ts);
           }
+        } else if (hasTemp && isStale) {
+          // Had data, but last ping is older than 11s — offline
+          card.className = 'card no-data';
+          const t = reading.temperature;
+          tempEl.textContent = t;
+          tempEl.className   = 'temp-big empty';
+
+          const ts = reading.recordedAt
+            ? new Date(reading.recordedAt).toLocaleString('en-IN')
+            : '—';
+          const secsAgo = Math.round(ageMs / 1000);
+          recEl.textContent = 'Last seen: ' + ts + ' (' + secsAgo + 's ago)';
+          stEl.innerHTML = '<span class="err">● offline</span>';
         } else {
+          // No data at all
           card.className = 'card no-data';
           tempEl.textContent = '—';
           tempEl.className   = 'temp-big empty';
           recEl.textContent  = 'No data';
-          stEl.innerHTML     = '<span class="err">● offline / empty</span>';
+          stEl.innerHTML     = '<span class="err">● offline</span>';
         }
       }
 
