@@ -1,4 +1,4 @@
-# Hearth Admin — Server
+# JustEdge Admin — Server
 
 Node.js + Express + MongoDB API backing the superadmin dashboard: admin
 accounts, activity logs, access control, and oversight. Built to run locally
@@ -62,7 +62,7 @@ When you're ready:
 
 ## Wiring up the existing React app
 
-The frontend (`hearth-admin/`) currently runs entirely on localStorage-backed
+The frontend (`justedge-admin/`) currently runs entirely on localStorage-backed
 demo data (`src/context/DataContext.jsx`). To point it at this server:
 1. Replace the `localStorage` load/save in `DataContext.jsx` with `fetch`
    calls to these routes (start with `adminAccounts`, `activityLogs`,

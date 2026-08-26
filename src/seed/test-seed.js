@@ -15,28 +15,28 @@ import { BillingPlan } from '../models/BillingPlan.js';
 const FIXTURE = {
   superadmin: {
     name: 'QA Superadmin',
-    email: process.env.TEST_SUPERADMIN_EMAIL || 'qa.superadmin@hearth.test',
+    email: process.env.TEST_SUPERADMIN_EMAIL || 'qa.superadmin@justedge.local',
     password: process.env.TEST_SUPERADMIN_PASSWORD || 'QaSuperadmin@123',
     phone: '9000000001',
   },
 
   admin: {
     name: 'QA Admin',
-    email: process.env.TEST_ADMIN_EMAIL || 'qa.admin@hearth.test',
+    email: process.env.TEST_ADMIN_EMAIL || 'qa.admin@justedge.local',
     password: process.env.TEST_ADMIN_PASSWORD || 'QaAdmin@123',
     phone: '9000000002',
   },
 
   user1: {
     name: 'QA User One',
-    email: process.env.TEST_USER1_EMAIL || 'qa.user1@hearth.test',
+    email: process.env.TEST_USER1_EMAIL || 'qa.user1@justedge.local',
     password: process.env.TEST_USER1_PASSWORD || 'QaUser@123',
     phone: '9000000011',
   },
 
   user2: {
     name: 'QA User Two',
-    email: process.env.TEST_USER2_EMAIL || 'qa.user2@hearth.test',
+    email: process.env.TEST_USER2_EMAIL || 'qa.user2@justedge.local',
     password: process.env.TEST_USER2_PASSWORD || 'QaUser@123',
     phone: '9000000012',
   },

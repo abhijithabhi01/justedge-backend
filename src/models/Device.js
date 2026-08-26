@@ -17,11 +17,15 @@ const deviceSchema = new mongoose.Schema({
   // controllers/billingController.js for the reasoning.
   subscriptionExpiry: { type: Date, default: null },
   assignedUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'UserAccount', default: null },
+  // Links this inventory record to a physical board's deviceId in the
+  // AWS SensorData table (see services/iotFeed.js). Only meaningful when
+  // SENSOR_DATA_SOURCE=aws; null/unset devices keep using the simulator.
+  awsDeviceId: { type: String, trim: true, default: null },
 }, { timestamps: true });
 
 deviceSchema.methods.toSafeJSON = function toSafeJSON() {
-  const { _id, name, boardId, imei, simNo, subscriptionPlan, subscriptionExpiry, assignedUserId, createdAt } = this;
-  return { id: _id, name, boardId, imei, simNo, subscriptionPlan, subscriptionExpiry, assignedUserId, createdAt };
+  const { _id, name, boardId, imei, simNo, subscriptionPlan, subscriptionExpiry, assignedUserId, awsDeviceId, createdAt } = this;
+  return { id: _id, name, boardId, imei, simNo, subscriptionPlan, subscriptionExpiry, assignedUserId, awsDeviceId, createdAt };
 };
 
 export const Device = mongoose.model('Device', deviceSchema);

@@ -19,7 +19,7 @@ const accounts = {
   superadmin: {
     name: process.env.DEMO_SUPERADMIN_NAME || 'JustEdge Superadmin',
     email: process.env.DEMO_SUPERADMIN_EMAIL || 'superadmin@justedge.local',
-    password: process.env.DEMO_SUPERADMIN_PASSWORD || 'ChangeMe@123',
+    password: process.env.DEMO_SUPERADMIN_PASSWORD || 'Admin@1234',
     phone: '9000000001',
     companyName: process.env.DEMO_COMPANY_NAME || 'JustEdge',
     role: 'Superadmin',
@@ -27,7 +27,7 @@ const accounts = {
   admin: {
     name: process.env.DEMO_ADMIN_NAME || 'JustEdge Admin',
     email: process.env.DEMO_ADMIN_EMAIL || 'admin@justedge.local',
-    password: process.env.DEMO_ADMIN_PASSWORD || 'ChangeMe@123',
+    password: process.env.DEMO_ADMIN_PASSWORD || 'Admin@1234',
     phone: '9000000002',
     companyName: process.env.DEMO_ADMIN_COMPANY_NAME || 'Demo Company',
     role: 'Admin',
@@ -35,7 +35,7 @@ const accounts = {
   user: {
     name: process.env.DEMO_USER_NAME || 'JustEdge User',
     email: process.env.DEMO_USER_EMAIL || 'user@justedge.local',
-    password: process.env.DEMO_USER_PASSWORD || 'ChangeMe@123',
+    password: process.env.DEMO_USER_PASSWORD || 'Admin@1234',
     phone: '9000000003',
   },
 };

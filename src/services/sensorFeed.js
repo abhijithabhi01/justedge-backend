@@ -14,6 +14,13 @@
 // device's boardId; profileFor() maps it to a simulation profile, falling
 // back to a generic one for board types that don't have a dedicated profile
 // (e.g. new types added via the board catalog).
+import {
+  getLatestReading,
+  getLatestConnectionStatus,
+  resolveDeviceStatus,
+  normalise,
+} from './iotFeed.js';
+
 const SOURCE = process.env.SENSOR_DATA_SOURCE || 'mock';
 
 // One profile per board type — this is the thing that varies across "many
@@ -148,14 +155,112 @@ function getCachedReading(device) {
   return data;
 }
 
-// deviceLite: { id, name, type, typeLabel? } — id must be a stable string
-// (a registered Device's Mongo _id.toString()).
-export function simulateReading(deviceLite) {
-  if (SOURCE === 'aws') {
-    // TODO: replace with an AWS SDK call (IoT Core / Timestream) returning
-    // the same shape as formatReading() above. Keep routing it through
-    // getCachedReading() so the cache above still applies to real calls.
-    throw Object.assign(new Error('AWS sensor source not wired up yet'), { status: 501 });
+// Same duplicate-request collapsing as getCachedReading above, kept as a
+// separate map since AWS reads are keyed by awsDeviceId (one physical
+// board can, in principle, back a Device record without a name clash with
+// the simulator's id-keyed cache).
+const awsReadingCache = new Map(); // awsDeviceId -> { data, expires }
+
+// Build a normalised sensors array from the raw DynamoDB item.
+// The current IoT boards report: temperature, humidity, pressure, battery.
+// Any field missing from the item is omitted from the array (rather than
+// surfaced as null) so the frontend can safely iterate what's actually there.
+function awsSensorsFromItem(item) {
+  if (!item) return [];
+
+  const sensors = [];
+
+  // Temperature — may live at top level or inside extras{}
+  const temp = item.temperature ?? item.extras?.temperature ?? null;
+  if (temp !== null) {
+    sensors.push({ key: 'temp_c', label: 'Temperature', unit: '°C', value: Number(temp) });
+  }
+
+  // Humidity
+  const hum = item.humidity ?? item.extras?.humidity ?? null;
+  if (hum !== null) {
+    sensors.push({ key: 'humidity_pct', label: 'Humidity', unit: '%', value: Number(hum) });
+  }
+
+  // Pressure
+  const pressure = item.pressure ?? item.extras?.pressure ?? null;
+  if (pressure !== null) {
+    sensors.push({ key: 'pressure_hpa', label: 'Pressure', unit: 'hPa', value: Number(pressure) });
+  }
+
+  // Battery voltage / percentage — boards may report as batteryVoltage or battery
+  const batt = item.battery ?? item.batteryVoltage ?? item.extras?.battery ?? null;
+  if (batt !== null) {
+    // Values > 5 are treated as a percentage already; otherwise assume volts (3.0-4.2V range)
+    const pct = batt > 5 ? Number(batt) : Math.round(((Number(batt) - 3.0) / (4.2 - 3.0)) * 100);
+    sensors.push({ key: 'battery_pct', label: 'Battery', unit: '%', value: Math.max(0, Math.min(100, pct)) });
+  }
+
+  return sensors;
+}
+
+async function getCachedAwsReading(deviceLite) {
+  const key = deviceLite.awsDeviceId;
+  // Caller should only invoke this when awsDeviceId is set.
+  if (!key) {
+    return getCachedReading(deviceLite);
+  }
+
+  const cached = awsReadingCache.get(key);
+  const now = Date.now();
+  if (cached && now < cached.expires) return cached.data;
+
+  try {
+    // Telemetry (temp/etc.) and connection (ONLINE/OFFLINE) are separate
+    // row types in SensorData — resolve them independently so a board that
+    // went offline is not stuck showing "Online" from an old telemetry row.
+    const [item, connection] = await Promise.all([
+      getLatestReading(key),
+      getLatestConnectionStatus(key),
+    ]);
+    const reading = normalise(item);
+
+    const sensors = awsSensorsFromItem(item);
+    const battSensor = sensors.find((s) => s.key === 'battery_pct');
+
+    const status = resolveDeviceStatus({
+      connection,
+      telemetryItem: item,
+    });
+
+    const data = {
+      id: deviceLite.id,
+      name: deviceLite.name,
+      type: deviceLite.type,
+      typeLabel: deviceLite.typeLabel || 'AWS Board',
+      status,
+      battery: battSensor ? battSensor.value : null,
+      lastPing: reading?.recordedAt || null,
+      serverTime: new Date().toISOString(),
+      relays: [],
+      sensors,
+      source: 'aws',
+    };
+
+    awsReadingCache.set(key, { data, expires: now + CACHE_TTL_MS });
+    return data;
+  } catch (err) {
+    // AWS read failed for this board — fall back to simulator so one bad
+    // device cannot take down the whole /devices/live fleet response.
+    console.error(`[sensorFeed] AWS read failed for ${key}:`, err.message);
+    return getCachedReading(deviceLite);
+  }
+}
+
+// deviceLite: { id, name, type, typeLabel?, awsDeviceId? } — id must be a
+// stable string (a registered Device's Mongo _id.toString()).
+export async function simulateReading(deviceLite) {
+  // Only hit DynamoDB when this inventory record is linked to a physical
+  // board. Older/demo devices with awsDeviceId=null keep using the
+  // simulator even if SENSOR_DATA_SOURCE=aws — otherwise /devices/live
+  // returns 409 and the whole Sensors page fails to load.
+  if (SOURCE === 'aws' && deviceLite.awsDeviceId) {
+    return getCachedAwsReading(deviceLite);
   }
   return getCachedReading(deviceLite);
 }

@@ -6,6 +6,7 @@ import {
   getRecentReadings,
   getAllBoardReadings,
   normalise,
+  discoverBoards,
   BOARDS,
 } from '../services/iotFeed.js';
 
@@ -69,5 +70,20 @@ router.use(requireAuth);
 router.get('/live',              liveAll);
 router.get('/live/:deviceId',    liveOne);
 router.get('/history/:deviceId', history);
+
+/**
+ * GET /api/iot/boards
+ * Every deviceId currently reporting into DynamoDB — used by the admin
+ * "Add sensor" form to pick which physical AWS board a new device record
+ * maps to. Any authenticated admin/user can read this list.
+ */
+router.get('/boards', async (req, res) => {
+  try {
+    const boards = await discoverBoards();
+    res.json({ boards });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 export default router;

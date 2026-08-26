@@ -12,9 +12,9 @@ async function run() {
 
   const existingCount = await AdminAccount.countDocuments();
   if (existingCount === 0) {
-    const name = process.env.SEED_SUPERADMIN_NAME || 'Founder Admin';
-    const email = process.env.SEED_SUPERADMIN_EMAIL || 'admin@hearth.io';
-    const password = process.env.SEED_SUPERADMIN_PASSWORD || 'change-this-immediately';
+    const name = process.env.SEED_SUPERADMIN_NAME || 'Super Admin';
+    const email = process.env.SEED_SUPERADMIN_EMAIL || 'superadmin@justedge.local';
+    const password = process.env.SEED_SUPERADMIN_PASSWORD || 'Admin@1234';
 
     const superadmin = new AdminAccount({
       name, email: email.toLowerCase(), companyName: process.env.SEED_COMPANY_NAME || 'JustEdge', role: 'Superadmin', status: 'active', twoFactor: false,

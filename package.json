@@ -1,9 +1,9 @@
 {
-  "name": "hearth-admin-server",
+  "name": "JustEdge Backend",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Node/Express + MongoDB API for the Hearth superadmin dashboard (admin accounts, activity logs, access control, oversight). Designed to move behind AWS (EC2/ECS + DocumentDB or Atlas) later with no code changes — all infra is env-configured.",
+  "description": "Node/Express + MongoDB API for the JustEdge superadmin dashboard (admin accounts, activity logs, access control, oversight). Designed to move behind AWS (EC2/ECS + DocumentDB or Atlas) later with no code changes — all infra is env-configured.",
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
