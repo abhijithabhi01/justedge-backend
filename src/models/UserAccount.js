@@ -69,8 +69,19 @@ userAccountSchema.methods.checkPassword = function checkPassword(plain) {
 };
 
 userAccountSchema.methods.toSafeJSON = function toSafeJSON() {
-  const { _id, name, email, phone, role, status, permissions, lastLogin, createdAt } = this;
-  return { id: _id, name, email, phone, role, status, permissions, lastLogin, createdAt };
+  const { _id, name, email, phone, role, status, permissions, lastLogin, createdAt, createdBy } = this;
+  return {
+    id: _id,
+    name,
+    email,
+    phone,
+    role,
+    status,
+    permissions,
+    lastLogin,
+    createdAt,
+    createdBy: createdBy ? String(createdBy) : null,
+  };
 };
 
 export const UserAccount = mongoose.model('UserAccount', userAccountSchema);

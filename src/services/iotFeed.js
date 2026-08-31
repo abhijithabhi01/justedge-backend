@@ -31,6 +31,7 @@ export const BOARDS = [
   { deviceId: 'DynamoDB_2',  label: 'DynamoDB 2' },
   { deviceId: 'DynamoDB_3',  label: 'DynamoDB 3' },
   { deviceId: 'DynamoDB_4',  label: 'DynamoDB 4' },
+  { deviceId: 'ESP32_001',   label: 'GPS Board ESP32_001' },
 ];
 
 /**
@@ -251,9 +252,13 @@ export function normalise(item) {
   if (!item) return null;
   const temp = item.temperature ?? item.extras?.temperature ?? null;
   const ms = toEpochMs(item.timestamp);
+  const lat = item.latitude ?? item.lat ?? item.extras?.latitude ?? null;
+  const lng = item.longitude ?? item.lng ?? item.lon ?? item.extras?.longitude ?? null;
   return {
-    deviceId:    item.deviceId || null,
+    deviceId:    item.deviceId || item.device_id || null,
     temperature: temp !== null ? Number(temp) : null,
+    latitude:    lat != null && Number.isFinite(Number(lat)) ? Number(lat) : null,
+    longitude:   lng != null && Number.isFinite(Number(lng)) ? Number(lng) : null,
     timestamp:   item.timestamp != null ? Number(item.timestamp) : null,
     recordedAt:  ms ? new Date(ms).toISOString() : null,
     status: item.status ? String(item.status).toLowerCase() : 'unknown',

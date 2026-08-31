@@ -52,6 +52,13 @@ const DEVICE_PROFILES = {
       { key: 'vibration_g', label: 'Vibration', unit: 'g', min: 0, max: 2, drift: 0.05 },
     ],
   },
+  'gps-board': {
+    label: 'GPS Tracker Board',
+    relayCount: 0,
+    sensors: [
+      { key: 'temp_c', label: 'Temperature', unit: '°C', min: 22, max: 28, drift: 0.2 },
+    ],
+  },
 };
 
 const DEFAULT_PROFILE_KEY = 'sensor-board-generic';
@@ -196,6 +203,14 @@ function awsSensorsFromItem(item) {
     sensors.push({ key: 'battery_pct', label: 'Battery', unit: '%', value: Math.max(0, Math.min(100, pct)) });
   }
 
+  const lat = item.latitude ?? item.lat ?? item.extras?.latitude ?? null;
+  const lng = item.longitude ?? item.lng ?? item.lon ?? item.extras?.longitude ?? null;
+  if (lat != null && Number.isFinite(Number(lat))) {
+    sensors.push({ key: 'latitude', label: 'Latitude', unit: '°', value: Number(lat) });
+  }
+  if (lng != null && Number.isFinite(Number(lng))) {
+    sensors.push({ key: 'longitude', label: 'Longitude', unit: '°', value: Number(lng) });
+  }
   return sensors;
 }
 
@@ -222,6 +237,8 @@ async function getCachedAwsReading(deviceLite) {
 
     const sensors = awsSensorsFromItem(item);
     const battSensor = sensors.find((s) => s.key === 'battery_pct');
+    const latSensor = sensors.find((s) => s.key === 'latitude');
+    const lngSensor = sensors.find((s) => s.key === 'longitude');
 
     const status = resolveDeviceStatus({
       connection,
@@ -240,6 +257,8 @@ async function getCachedAwsReading(deviceLite) {
       relays: [],
       sensors,
       source: 'aws',
+      latitude: latSensor ? latSensor.value : (reading?.latitude ?? null),
+      longitude: lngSensor ? lngSensor.value : (reading?.longitude ?? null),
     };
 
     awsReadingCache.set(key, { data, expires: now + CACHE_TTL_MS });

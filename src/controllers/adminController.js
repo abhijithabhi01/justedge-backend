@@ -17,8 +17,10 @@ export async function listAdmins(req, res) {
     AdminAccount.countDocuments(),
   ]);
 
-  const results = await Promise.all(admins.map(async (admin) => {
-    const users = await UserAccount.find({ createdBy: admin._id }).select('_id');
+   const results = await Promise.all(admins.map(async (admin) => {
+    const users = await UserAccount.find({ createdBy: admin._id })
+      .select('_id name email status role')
+      .sort({ name: 1 });
     const userIds = users.map((user) => user._id);
     const subscriptionCount = userIds.length
       ? await Device.countDocuments({
@@ -29,8 +31,15 @@ export async function listAdmins(req, res) {
 
     return {
       ...admin.toSafeJSON(),
-      userCount: userIds.length,
+      userCount: users.length,
       subscriptionCount,
+      teamUsers: users.map((u) => ({
+        id: String(u._id),
+        name: u.name,
+        email: u.email,
+        status: u.status,
+        role: u.role,
+      })),
     };
   }));
 
@@ -104,11 +113,28 @@ export async function setAdminStatus(req, res) {
 
   admin.status = status;
   await admin.save();
+
+  // Cascade status to users created by this admin (company fleet accounts).
+  const userCascade = await UserAccount.updateMany(
+    { createdBy: admin._id },
+    { $set: { status } }
+  );
+  const cascadedUsers = userCascade.modifiedCount ?? userCascade.nModified ?? 0;
+
   await logActivity(req, {
-    action: status === 'suspended' ? 'Suspended admin account' : 'Reactivated admin account',
-    target: admin.name, targetType: 'admin', category: 'admin', severity: 'critical',
+    action:
+      status === 'suspended'
+        ? `Suspended admin account (+${cascadedUsers} users)`
+        : `Reactivated admin account (+${cascadedUsers} users)`,
+    target: admin.name,
+    targetType: 'admin',
+    category: 'admin',
+    severity: 'critical',
   });
-  res.json({ admin: admin.toSafeJSON() });
+  res.json({
+    admin: admin.toSafeJSON(),
+    cascadedUsers,
+  });
 }
 
 export async function removeAdmin(req, res) {
