@@ -11,6 +11,8 @@
     "seed:demo": "node src/seed/demo-seed.js",
     "simulate:gps": "node scripts/simulate-gps-board.js",
     "seed:gps": "node src/seed/seed-gps-device.js",
+    "seed:demo-mongo": "node src/seed/seed-demo-mongo.js",
+    "simulate:demo": "node scripts/demo-mongo-sensors.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },

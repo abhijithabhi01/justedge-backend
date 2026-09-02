@@ -9,6 +9,8 @@ import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import mongoose from 'mongoose';
 import { connectDB } from './config/db.js';
+import demoRoutes from './routes/demoRoutes.js';
+import { startDemoSensorSimulator } from './services/demoSensorSimulator.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 4000;
@@ -55,7 +57,7 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 // Tighter limit on auth to blunt credential-stuffing / brute force attempts.
 app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false }));
 app.use('/api', rateLimit({ windowMs: 15 * 60 * 1000, max: 600, standardHeaders: true, legacyHeaders: false }));
-
+app.use('/api/demo', demoRoutes);
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 // Detailed runtime diagnostics (uptime, env, Node/DB info) — behind auth so
@@ -94,5 +96,8 @@ app.use((err, req, res, next) => {
 });
 
 connectDB().then(() => {
-  app.listen(PORT, () => console.log(`[server] listening on :${PORT}`));
+  app.listen(PORT, () => {
+    console.log(`[server] listening on :${PORT}`);
+    startDemoSensorSimulator();
+  });
 });
