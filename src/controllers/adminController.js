@@ -2,6 +2,7 @@ import { AdminAccount, defaultPermissionsForRole } from '../models/AdminAccount.
 import { UserAccount } from '../models/UserAccount.js';
 import { Device } from '../models/Device.js';
 import { logActivity } from '../middleware/activityLogger.js';
+import { sendAdminWelcomeEmail } from '../services/emailService.js';
 
 // Only pull the fields toSafeJSON() actually exposes — trims what Mongo
 // has to load and send over the wire (passwordHash is already excluded by
@@ -64,14 +65,19 @@ export async function createAdmin(req, res) {
     permissions: defaultPermissionsForRole('Admin'),
     createdBy: req.admin._id,
   });
-  // Default password is derived from the email's local-part, e.g.
-  // "priya@company.com" -> "priya123", unless the superadmin supplied one
-  // explicitly via tempPassword. Returned once in the response so it can be
-  // shared with the new admin; never stored in plaintext or retrievable again.
+
   const usernamePart = admin.email.split('@')[0].replace(/[^a-z0-9]/gi, '') || 'admin';
   const finalTempPassword = tempPassword || `${usernamePart}123`;
   await admin.setPassword(finalTempPassword);
   await admin.save();
+
+  // Send welcome email with login credentials — fire-and-forget (never block the response)
+  sendAdminWelcomeEmail({
+    name:        admin.name,
+    email:       admin.email,
+    tempPassword: finalTempPassword,
+    companyName: admin.companyName,
+  }).catch((err) => console.error('[email] sendAdminWelcomeEmail failed:', err.message));
 
   await logActivity(req, { action: 'Created admin account', target: `${admin.name} (${admin.role})`, targetType: 'admin', category: 'admin', severity: 'warn' });
   res.status(201).json({ admin: admin.toSafeJSON(), tempPassword: finalTempPassword });

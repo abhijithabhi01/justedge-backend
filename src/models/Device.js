@@ -21,6 +21,9 @@ const deviceSchema = new mongoose.Schema({
   // AWS SensorData table (see services/iotFeed.js). Only meaningful when
   // SENSOR_DATA_SOURCE=aws; null/unset devices keep using the simulator.
   awsDeviceId: { type: String, trim: true, default: null },
+  site: { type: String, trim: true, default: '' },
+lat: { type: Number, default: null },
+lng: { type: Number, default: null },
 }, { timestamps: true });
 
 deviceSchema.methods.toSafeJSON = function toSafeJSON() {

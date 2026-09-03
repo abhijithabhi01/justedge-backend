@@ -1,6 +1,8 @@
 import { UserAccount, defaultUserPermissions, USER_PERMISSION_KEYS } from '../models/UserAccount.js';
 import { Device } from '../models/Device.js';
+import { AdminAccount } from '../models/AdminAccount.js';
 import { logActivity } from '../middleware/activityLogger.js';
+import { sendUserWelcomeEmail } from '../services/emailService.js';
 
 const USER_LIST_FIELDS = 'name email phone status permissions lastLogin createdAt';
 
@@ -49,18 +51,26 @@ export async function createUser(req, res) {
     email: email.toLowerCase().trim(),
     phone: phone?.trim() || '',
     status: 'invited',
-    // Omitting `permissions` starts everything off except monitor + exportData.
     permissions: defaultUserPermissions(permissions || {}),
     createdBy: req.admin._id,
   });
-  // Default password is derived from the email's local-part, e.g.
-  // "meera@company.com" -> "meera123". Returned once in the response below
-  // so the creating admin can hand it to the user; never stored in plaintext
-  // or retrievable again after this call.
+
   const usernamePart = user.email.split('@')[0].replace(/[^a-z0-9]/gi, '') || 'user';
   const tempPassword = `${usernamePart}123`;
   await user.setPassword(tempPassword);
   await user.save();
+
+  // Fetch admin info for the welcome email (company name, admin name)
+  const creatingAdmin = await AdminAccount.findById(req.admin._id).select('name companyName');
+
+  // Send welcome email — fire-and-forget (never block the response)
+  sendUserWelcomeEmail({
+    name:        user.name,
+    email:       user.email,
+    tempPassword,
+    adminName:   creatingAdmin?.name   || '',
+    companyName: creatingAdmin?.companyName || '',
+  }).catch((err) => console.error('[email] sendUserWelcomeEmail failed:', err.message));
 
   await logActivity(req, { action: 'Created user account', target: user.name, targetType: 'user', category: 'user', severity: 'info' });
   res.status(201).json({ user: user.toSafeJSON(), tempPassword });

@@ -1,151 +1,173 @@
 /**
- * seed-aws-devices.js
+ * seed-aws-locations.js
  *
- * Registers the 4 physical AWS boards from DynamoDB as Device records in
- * MongoDB and links them to the Admin account (or a named user if provided).
+ * Updates install locations for the 4 physical AWS boards in DynamoDB.
+ * Matches awsDeviceId values from seed-aws-devices.js exactly.
  *
- * Run once after SENSOR_DATA_SOURCE=aws is set:
- *   node src/seed/seed-aws-devices.js
+ * Usage:
+ *   node scripts/seed-aws-locations.js
  *
- * Environment variables:
- *   MONGO_URI              — MongoDB connection string (from .env)
- *   SEED_ADMIN_EMAIL       — Admin whose account the devices are registered under
- *                            (defaults to admin@justedge.local)
- *   SEED_ASSIGN_USER_EMAIL — Optional: assign all 4 boards to this User account
+ * Environment variables (from .env):
+ *   AWS_REGION        — e.g. ap-south-1
+ *   AWS_ACCESS_KEY_ID
+ *   AWS_SECRET_ACCESS_KEY
+ *   DYNAMO_TABLE      — your DynamoDB table name (e.g. iot-saas-platform or SensorData)
  *
- * The script is idempotent: running it twice updates existing records rather
- * than creating duplicates (keyed on awsDeviceId).
+ * The script is idempotent — safe to run multiple times.
+ * Each run overwrites the location fields for the given deviceId.
  */
 
 import 'dotenv/config';
-import mongoose from 'mongoose';
-import { connectDB } from '../config/db.js';
-import { Device } from '../models/Device.js';
-import { AdminAccount } from '../models/AdminAccount.js';
-import { UserAccount } from '../models/UserAccount.js';
-import { BoardCatalog } from '../models/BoardCatalog.js';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, UpdateCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
 
-// ── The 4 boards reporting into your DynamoDB SensorData table ──────────────
-// awsDeviceId must match the deviceId column in DynamoDB exactly.
-// boardId must match a BoardCatalog.id value (sensor-board-generic is the
-// default generic board; change per device if you have specific types).
-const AWS_BOARDS = [
+// ── DynamoDB client setup ────────────────────────────────────────────────────
+const client = new DynamoDBClient({
+  region: process.env.AWS_REGION || 'ap-south-1',
+  credentials: {
+    accessKeyId:     process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
+});
+
+const ddb = DynamoDBDocumentClient.from(client);
+
+const TABLE = process.env.DYNAMO_TABLE || 'iot-saas-platform';
+
+// ── Location data — matches awsDeviceId from seed-aws-devices.js ─────────────
+// Coordinates are real Bengaluru neighbourhood centroids.
+const LOCATIONS = [
   {
-    awsDeviceId:      'Susima_IoT1',
-    name:             'Susima IoT 1',
-    boardId:          'sensor-board-generic',
-    imei:             'AWS100000000001',   // placeholder — update with real IMEI if known
-    simNo:            '',
-    subscriptionPlan: 'pro',
-    subscriptionExpiry: new Date('2027-12-31'),
+    deviceId: 'Susima_IoT1',
+    lat:      12.9352,
+    lng:      77.6245,
+    site:     'Koramangala',
+    city:     'Bengaluru',
+    state:    'Karnataka',
+    country:  'India',
   },
   {
-    awsDeviceId:      'DynamoDB_2',
-    name:             'AWS Sensor Board 2',
-    boardId:          'sensor-board-generic',
-    imei:             'AWS100000000002',
-    simNo:            '',
-    subscriptionPlan: 'pro',
-    subscriptionExpiry: new Date('2027-12-31'),
+    deviceId: 'DynamoDB_2',
+    lat:      13.0358,
+    lng:      77.5970,
+    site:     'Hebbal',
+    city:     'Bengaluru',
+    state:    'Karnataka',
+    country:  'India',
   },
   {
-    awsDeviceId:      'DynamoDB_3',
-    name:             'AWS Sensor Board 3',
-    boardId:          'sensor-board-generic',
-    imei:             'AWS100000000003',
-    simNo:            '',
-    subscriptionPlan: 'pro',
-    subscriptionExpiry: new Date('2027-12-31'),
+    deviceId: 'DynamoDB_3',
+    lat:      12.9716,
+    lng:      77.5946,
+    site:     'MG Road',
+    city:     'Bengaluru',
+    state:    'Karnataka',
+    country:  'India',
   },
   {
-    awsDeviceId:      'DynamoDB_4',
-    name:             'AWS Sensor Board 4',
-    boardId:          'sensor-board-generic',
-    imei:             'AWS100000000004',
-    simNo:            '',
-    subscriptionPlan: 'pro',
-    subscriptionExpiry: new Date('2027-12-31'),
+    deviceId: 'DynamoDB_4',
+    lat:      13.0297,
+    lng:      77.5469,
+    site:     'Yeshwanthpur',
+    city:     'Bengaluru',
+    state:    'Karnataka',
+    country:  'India',
   },
 ];
 
-async function run() {
-  await connectDB();
-
+// ── Helper: check if device record exists in DynamoDB ────────────────────────
+async function deviceExists(deviceId) {
   try {
-    // Verify board catalog exists
-    const catalog = await BoardCatalog.find();
-    if (catalog.length === 0) {
-      console.error('[seed-aws] No board catalog entries found. Run seed.js first.');
-      process.exit(1);
-    }
-    const catalogIds = new Set(catalog.map(b => b.id));
-
-    // Resolve optional user assignment
-    const assignEmail = process.env.SEED_ASSIGN_USER_EMAIL;
-    let assignedUserId = null;
-    if (assignEmail) {
-      const user = await UserAccount.findOne({ email: assignEmail.toLowerCase() });
-      if (!user) {
-        console.warn(`[seed-aws] User ${assignEmail} not found — boards will be unassigned.`);
-      } else {
-        assignedUserId = user._id;
-        console.log(`[seed-aws] Will assign all boards to user: ${user.name} (${user.email})`);
-      }
-    }
-
-    let created = 0;
-    let updated = 0;
-
-    for (const board of AWS_BOARDS) {
-      if (!catalogIds.has(board.boardId)) {
-        console.warn(`[seed-aws] boardId "${board.boardId}" not in catalog — skipping ${board.awsDeviceId}`);
-        continue;
-      }
-
-      // Check if this awsDeviceId is already linked to a different Device
-      const existing = await Device.findOne({ awsDeviceId: board.awsDeviceId });
-
-      if (existing) {
-        // Update name/plan/expiry but keep imei & simNo as-is (may have been
-        // manually corrected via the admin UI).
-        existing.name             = board.name;
-        existing.subscriptionPlan = board.subscriptionPlan;
-        existing.subscriptionExpiry = board.subscriptionExpiry;
-        if (assignedUserId) existing.assignedUserId = assignedUserId;
-        await existing.save();
-        console.log(`[seed-aws] updated  ${board.awsDeviceId} → "${board.name}" (id: ${existing._id})`);
-        updated++;
-      } else {
-        // New registration — check IMEI uniqueness first
-        const iemClash = await Device.findOne({ imei: board.imei });
-        if (iemClash) {
-          console.warn(`[seed-aws] IMEI ${board.imei} already used by "${iemClash.name}" — update AWS_BOARDS.imei for ${board.awsDeviceId}`);
-          continue;
-        }
-
-        const device = await Device.create({
-          name:               board.name,
-          boardId:            board.boardId,
-          imei:               board.imei,
-          simNo:              board.simNo,
-          subscriptionPlan:   board.subscriptionPlan,
-          subscriptionExpiry: board.subscriptionExpiry,
-          assignedUserId:     assignedUserId || null,
-          awsDeviceId:        board.awsDeviceId,
-        });
-        console.log(`[seed-aws] created  ${board.awsDeviceId} → "${board.name}" (id: ${device._id})`);
-        created++;
-      }
-    }
-
-    console.log(`\n[seed-aws] done — ${created} created, ${updated} updated.`);
-    console.log('[seed-aws] Make sure SENSOR_DATA_SOURCE=aws is set in your .env before starting the server.');
-  } finally {
-    await mongoose.disconnect();
+    const res = await ddb.send(new GetCommand({
+      TableName: TABLE,
+      Key: { deviceId },
+    }));
+    return !!res.Item;
+  } catch (err) {
+    // If the table uses a different key schema this will throw — surface the error
+    throw new Error(`GetCommand failed for ${deviceId}: ${err.message}`);
   }
 }
 
-run().catch(err => {
-  console.error('[seed-aws] failed:', err);
+// ── Helper: update location fields on a device record ────────────────────────
+async function updateLocation(loc) {
+  const now = new Date().toISOString();
+
+  await ddb.send(new UpdateCommand({
+    TableName: TABLE,
+    Key: { deviceId: loc.deviceId },
+
+    // Only touch location fields — does NOT overwrite telemetry or other attrs
+    UpdateExpression: `SET
+      #loc.lat       = :lat,
+      #loc.lng       = :lng,
+      #loc.site      = :site,
+      #loc.city      = :city,
+      #loc.#st       = :state,
+      #loc.country   = :country,
+      updatedAt      = :updatedAt`,
+
+    ExpressionAttributeNames: {
+      '#loc': 'location',
+      '#st':  'state',      // 'state' is a reserved word in DynamoDB
+    },
+
+    ExpressionAttributeValues: {
+      ':lat':       loc.lat,
+      ':lng':       loc.lng,
+      ':site':      loc.site,
+      ':city':      loc.city,
+      ':state':     loc.state,
+      ':country':   loc.country,
+      ':updatedAt': now,
+    },
+
+    // Only update if the record already exists — do NOT create phantom records
+    ConditionExpression: 'attribute_exists(deviceId)',
+  }));
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
+async function main() {
+  console.log(`[seed-aws-locations] table  : ${TABLE}`);
+  console.log(`[seed-aws-locations] region : ${process.env.AWS_REGION || 'ap-south-1'}`);
+  console.log(`[seed-aws-locations] devices: ${LOCATIONS.length}\n`);
+
+  let ok = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  for (const loc of LOCATIONS) {
+    try {
+      // Guard: skip if the device row doesn't exist yet
+      const exists = await deviceExists(loc.deviceId);
+      if (!exists) {
+        console.warn(`[SKIP]   ${loc.deviceId} — record not found in ${TABLE}. Run seed-aws-devices.js first.`);
+        skipped++;
+        continue;
+      }
+
+      await updateLocation(loc);
+      console.log(`[OK]     ${loc.deviceId} → ${loc.site}, ${loc.city} (${loc.lat}, ${loc.lng})`);
+      ok++;
+    } catch (err) {
+      if (err.name === 'ConditionalCheckFailedException') {
+        console.warn(`[SKIP]   ${loc.deviceId} — ConditionExpression failed (record missing?)`);
+        skipped++;
+      } else {
+        console.error(`[FAIL]   ${loc.deviceId} — ${err.message}`);
+        failed++;
+      }
+    }
+  }
+
+  console.log(`\n[seed-aws-locations] done — ${ok} updated, ${skipped} skipped, ${failed} failed.`);
+
+  if (failed > 0) process.exit(1);
+  process.exit(0);
+}
+
+main().catch((err) => {
+  console.error('[seed-aws-locations] fatal:', err);
   process.exit(1);
 });

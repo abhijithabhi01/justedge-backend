@@ -4,7 +4,7 @@
  */
 
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, QueryCommand, ScanCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 
 const client = DynamoDBDocumentClient.from(
   new DynamoDBClient({
@@ -19,13 +19,6 @@ const client = DynamoDBDocumentClient.from(
 
 const TABLE = process.env.DYNAMODB_TABLE_NAME || 'SensorData';
 
-/**
- * Fallback labels only — used to prettify a deviceId if `discoverBoards()`
- * finds it live in the table. Not the source of truth for which boards
- * exist; that's always the table itself (see discoverBoards below), so a
- * new physical board shows up for admins the moment it starts writing to
- * DynamoDB, with no code change here.
- */
 export const BOARDS = [
   { deviceId: 'Susima_IoT1', label: 'Susima IoT 1' },
   { deviceId: 'DynamoDB_2',  label: 'DynamoDB 2' },
@@ -34,13 +27,6 @@ export const BOARDS = [
   { deviceId: 'ESP32_001',   label: 'GPS Board ESP32_001' },
 ];
 
-/**
- * Discover every distinct deviceId currently reporting into the table, by
- * scanning it (paginating past the 1 MB-per-page limit) and deduping. Fine
- * at this table's scale (tens to low thousands of rows); if the table
- * grows large, this should move to a small side table of known deviceIds
- * maintained by the ingest pipeline instead of a full scan.
- */
 export async function discoverBoards() {
   const ids = new Set();
   let ExclusiveStartKey;
@@ -59,8 +45,6 @@ export async function discoverBoards() {
     } while (ExclusiveStartKey);
   } catch (err) {
     console.error('[iotFeed] discoverBoards error:', err.message);
-    // Fall back to the known-labels list rather than leaving admins with
-    // nothing to pick from if the scan itself fails (e.g. permissions).
     return BOARDS;
   }
 
@@ -71,12 +55,6 @@ export async function discoverBoards() {
   }));
 }
 
-/**
- * DynamoDB rows mix timestamp units:
- * - telemetry: usually unix *seconds*
- * - connection: often Date.now() *milliseconds*
- * Values > 1e12 are treated as ms; otherwise as seconds.
- */
 export function toEpochMs(ts) {
   if (ts == null || ts === '') return null;
   const n = Number(ts);
@@ -84,9 +62,6 @@ export function toEpochMs(ts) {
   return n > 1e12 ? n : n * 1000;
 }
 
-/**
- * Query a page of recent items for one device (mixed telemetry + connection).
- */
 async function queryRecentItems(deviceId, limit = 40) {
   const res = await client.send(new QueryCommand({
     TableName:                 TABLE,
@@ -107,21 +82,35 @@ function isConnection(item) {
 }
 
 /**
- * Latest telemetry row for a single device (for temperature / sensors).
- *
- * The table mixes `type: "telemetry"` and `type: "connection"`. Connection
- * timestamps are often in ms while telemetry is in seconds, so a raw
- * "newest first" pick is unreliable — we score by real wall-clock time.
+ * Latest telemetry for a device.
+ * GPS on telemetry wins; otherwise merge app-written type:"location".
  */
 export async function getLatestReading(deviceId) {
   try {
     const items = await queryRecentItems(deviceId, 40);
     const telemetry = items.filter(isTelemetry);
+    const locations = items.filter((i) => (i.type || '') === 'location');
+    locations.sort((a, b) => (toEpochMs(b.timestamp) || 0) - (toEpochMs(a.timestamp) || 0));
+    const installLoc = locations[0] || null;
+
     if (!telemetry.length) {
-      return items[0] ?? null;
+      return installLoc || items[0] || null;
     }
     telemetry.sort((a, b) => (toEpochMs(b.timestamp) || 0) - (toEpochMs(a.timestamp) || 0));
-    return telemetry[0];
+    const tel = { ...telemetry[0] };
+
+    const hasGps =
+      (tel.latitude != null || tel.lat != null) &&
+      (tel.longitude != null || tel.lng != null || tel.lon != null);
+    if (!hasGps && installLoc) {
+      tel.latitude = installLoc.latitude ?? installLoc.lat ?? null;
+      tel.longitude = installLoc.longitude ?? installLoc.lng ?? installLoc.lon ?? null;
+      tel.site = installLoc.site || tel.site || '';
+      tel._locationSource = 'install';
+    } else if (hasGps) {
+      tel._locationSource = 'gps';
+    }
+    return tel;
   } catch (err) {
     console.error(`[iotFeed] getLatestReading(${deviceId}) error:`, err.message);
     return null;
@@ -129,9 +118,38 @@ export async function getLatestReading(deviceId) {
 }
 
 /**
- * Latest connection status for a device (ONLINE / OFFLINE events).
- * Returns { status, recordedAtMs } or null if no connection rows found.
+ * Fixed install location for non-GPS boards (temp sensors).
+ * GPS telemetry lat/lng still takes priority when present.
  */
+export async function putDeviceLocation(deviceId, { lat, lng, site } = {}) {
+  if (!deviceId) return false;
+  const latitude = Number(lat);
+  const longitude = Number(lng);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return false;
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  try {
+    await client.send(new PutCommand({
+      TableName: TABLE,
+      Item: {
+        deviceId: String(deviceId),
+        timestamp: nowSec,
+        type: 'location',
+        status: 'ONLINE',
+        latitude,
+        longitude,
+        site: site ? String(site).slice(0, 300) : '',
+        source: 'justedge-app',
+        lastSeen: nowSec,
+      },
+    }));
+    return true;
+  } catch (err) {
+    console.error('[iotFeed] putDeviceLocation error:', err.message);
+    return false;
+  }
+}
+
 export async function getLatestConnectionStatus(deviceId) {
   try {
     const items = await queryRecentItems(deviceId, 40);
@@ -150,30 +168,15 @@ export async function getLatestConnectionStatus(deviceId) {
   }
 }
 
-/**
- * How long after the last telemetry (or connection) we still treat a board
- * as online when connection events are missing. Override with
- * AWS_OFFLINE_AFTER_MS in .env (default 5 minutes).
- */
 const OFFLINE_AFTER_MS = Number(process.env.AWS_OFFLINE_AFTER_MS) || 10 * 1000;
 
-/**
- * Resolve display status for a device:
- * 1. Prefer latest connection event (ONLINE/OFFLINE).
- * 2. Else use status on the latest telemetry row if present.
- * 3. If the newest signal is older than OFFLINE_AFTER_MS → offline.
- * 4. Otherwise unknown.
- */
 export function resolveDeviceStatus({ connection, telemetryItem, now = Date.now() }) {
   const telMs = telemetryItem ? toEpochMs(telemetryItem.timestamp) : null;
   const connMs = connection?.recordedAtMs ?? null;
   const newestMs = Math.max(telMs || 0, connMs || 0) || null;
 
-  // Prefer connection event when it is at least as recent as telemetry
-  // (or when there is no telemetry status).
   if (connection?.status) {
     if (!telMs || !connMs || connMs >= telMs - 1000) {
-      // Still mark offline if everything is stale
       if (newestMs && now - newestMs > OFFLINE_AFTER_MS) return 'offline';
       return connection.status;
     }
@@ -192,9 +195,6 @@ export function resolveDeviceStatus({ connection, telemetryItem, now = Date.now(
   return 'unknown';
 }
 
-/**
- * Latest N readings for a single device (for history / sparkline).
- */
 export async function getRecentReadings(deviceId, limit = 20) {
   try {
     const res = await client.send(new QueryCommand({
@@ -211,9 +211,6 @@ export async function getRecentReadings(deviceId, limit = 20) {
   }
 }
 
-/**
- * Latest reading for every known board (parallel queries against the same table).
- */
 export async function getAllBoardReadings() {
   const results = await Promise.all(
     BOARDS.map(async (board) => {
@@ -232,10 +229,6 @@ export async function getAllBoardReadings() {
   return results;
 }
 
-/**
- * Latest reading across ALL devices (one scan — legacy helper).
- * Prefer per-device queries on large tables.
- */
 export async function getAllLatestReadings(limit = 50) {
   const res = await client.send(new ScanCommand({
     TableName: TABLE,
@@ -244,10 +237,6 @@ export async function getAllLatestReadings(limit = 50) {
   return res.Items ?? [];
 }
 
-/**
- * Normalise a raw DynamoDB item into a clean shape for the API response.
- * Handles temperature in extras and mixed second/millisecond timestamps.
- */
 export function normalise(item) {
   if (!item) return null;
   const temp = item.temperature ?? item.extras?.temperature ?? null;
@@ -259,6 +248,8 @@ export function normalise(item) {
     temperature: temp !== null ? Number(temp) : null,
     latitude:    lat != null && Number.isFinite(Number(lat)) ? Number(lat) : null,
     longitude:   lng != null && Number.isFinite(Number(lng)) ? Number(lng) : null,
+    site:        item.site || '',
+    locationSource: item._locationSource || (item.type === 'location' ? 'install' : null),
     timestamp:   item.timestamp != null ? Number(item.timestamp) : null,
     recordedAt:  ms ? new Date(ms).toISOString() : null,
     status: item.status ? String(item.status).toLowerCase() : 'unknown',
