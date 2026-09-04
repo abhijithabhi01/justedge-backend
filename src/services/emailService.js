@@ -1,4 +1,3 @@
-
 function getLoginUrl() {
   // Must be set in .env — no hardcoded production URL in code
   const explicit = (process.env.APP_LOGIN_URL || '').trim();
@@ -74,6 +73,8 @@ export async function sendMail({ to, subject, text, html }) {
     return { sent: false, reason: 'nodemailer_missing' };
   }
 
+  // Render / many cloud hosts: Gmail IPv6 is often unreachable (ENETUNREACH ::587).
+  // Force IPv4 sockets so DNS AAAA records are not used.
   const transporter = nodemailer.createTransport({
     host: cfg.host,
     port: cfg.port,
@@ -82,15 +83,37 @@ export async function sendMail({ to, subject, text, html }) {
       user: cfg.user,
       pass: cfg.pass,
     },
-    connectionTimeout: 12_000,
-    greetingTimeout: 12_000,
-    socketTimeout: 20_000,
+    // Node net.Socket option — prefer IPv4 (fixes ENETUNREACH on Render)
+    family: 4,
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+    socketTimeout: 25_000,
+    tls: {
+      // Gmail STARTTLS on 587
+      minVersion: 'TLSv1.2',
+      servername: cfg.host,
+    },
   });
 
-  await transporter.sendMail({ from, to, subject, text, html });
-  console.log(`[email] sent → ${to} | ${subject} (via ${cfg.host})`);
-  return { sent: true };
+  try {
+    await transporter.sendMail({ from, to, subject, text, html });
+    console.log(`[email] sent → ${to} | ${subject} (via ${cfg.host}:${cfg.port} ipv4)`);
+    return { sent: true };
+  } catch (err) {
+    const msg = err?.message || String(err);
+    console.error(`[email] send failed: ${msg}`);
+    if (/ENETUNREACH|ETIMEDOUT|ECONNREFUSED|ESOCKET/i.test(msg)) {
+      console.error(
+        '[email] Tip (Render): outbound SMTP to Gmail may fail on free/IPv6 networks. ' +
+          '1) Ensure family IPv4 is set (already applied). ' +
+          '2) Try SMTP_PORT=465 and SMTP_SECURE=true. ' +
+          '3) Or use a transactional provider (Resend / SendGrid / Brevo) with their SMTP host.'
+      );
+    }
+    return { sent: false, reason: msg };
+  }
 }
+
 
 // ── Admin welcome email (called by adminController.createAdmin) ───────────────
 export async function sendAdminWelcomeEmail({ name, email, tempPassword, companyName }) {
@@ -156,6 +179,7 @@ export async function sendUserWelcomeEmail({ name, email, tempPassword, adminNam
 
   return sendMail({ to: email, subject, text, html });
 }
+
 
 /** Dark blue / white brand palette (Just Embedded) + amber Log in button */
 function buildWelcomeHtml({ loginUrl, headline, greeting, body, email, tempPassword }) {
