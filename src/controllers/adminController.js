@@ -80,26 +80,28 @@ export async function createAdmin(req, res) {
   await admin.setPassword(finalTempPassword);
   await admin.save();
 
-  // Welcome email with login URL + credentials (SMTP via env; does not fail the create)
-  let emailResult = { sent: false };
-  try {
-    emailResult = await sendAdminWelcomeEmail({
-      name: admin.name,
-      email: admin.email,
-      tempPassword: finalTempPassword,
-      companyName: admin.companyName,
-    });
-  } catch (err) {
+  // Welcome email in background — never delay the create response (SMTP can timeout)
+  sendAdminWelcomeEmail({
+    name: admin.name,
+    email: admin.email,
+    tempPassword: finalTempPassword,
+    companyName: admin.companyName,
+  }).catch((err) => {
     console.error('[email] sendAdminWelcomeEmail failed:', err.message);
-    emailResult = { sent: false, reason: err.message };
-  }
+  });
 
-  await logActivity(req, { action: 'Created admin account', target: `${admin.name} (${admin.role})`, targetType: 'admin', category: 'admin', severity: 'warn' });
+  await logActivity(req, {
+    action: 'Created admin account',
+    target: `${admin.name} (${admin.role})`,
+    targetType: 'admin',
+    category: 'admin',
+    severity: 'warn',
+  });
   res.status(201).json({
     admin: admin.toSafeJSON(),
     tempPassword: finalTempPassword,
-    emailSent: !!emailResult?.sent,
-    emailError: emailResult?.sent ? undefined : (emailResult?.reason || null),
+    emailSent: null, // sending in background
+    emailNote: 'Welcome email is being sent in the background. Share the temp password if mail is delayed.',
   });
 }
 

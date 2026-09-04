@@ -1,29 +1,16 @@
+
 function getLoginUrl() {
-  const explicit = process.env.APP_LOGIN_URL?.trim();
+  // Must be set in .env — no hardcoded production URL in code
+  const explicit = (process.env.APP_LOGIN_URL || '').trim();
   if (explicit) return explicit.replace(/\/$/, '');
 
-  const base = (process.env.FRONTEND_URL || process.env.APP_URL || '').trim().replace(/\/$/, '');
+  const base = (process.env.APP_URL || process.env.FRONTEND_URL || '').trim().replace(/\/$/, '');
   if (base) return `${base}/login`;
 
-  // Fallback: build from the Vercel-provided URL if present (works for
-  // production + preview deployments without hardcoding anything).
-  // Vercel exposes VERCEL_URL (no protocol) automatically at build/runtime.
-  const vercelUrl = (process.env.VERCEL_URL || '').trim().replace(/\/$/, '');
-  if (vercelUrl) {
-    const withProtocol = vercelUrl.startsWith('http') ? vercelUrl : `https://${vercelUrl}`;
-    return `${withProtocol}/login`;
-  }
-
-  // Last-resort fallback, also configurable via env so nothing is hardcoded
-  // per-project. Set DEFAULT_FRONTEND_URL if you want a fixed fallback.
-  const defaultUrl = (process.env.DEFAULT_FRONTEND_URL || '').trim().replace(/\/$/, '');
-  if (defaultUrl) return `${defaultUrl}/login`;
-
   console.warn(
-    '[email] No APP_LOGIN_URL, FRONTEND_URL, APP_URL, VERCEL_URL, or DEFAULT_FRONTEND_URL set — ' +
-      'login links in emails will be relative "/login" only.'
+    '[email] APP_LOGIN_URL is not set. Add APP_LOGIN_URL=https://your-app.example/login to .env'
   );
-  return '/login';
+  return '';
 }
 
 /**
@@ -95,6 +82,9 @@ export async function sendMail({ to, subject, text, html }) {
       user: cfg.user,
       pass: cfg.pass,
     },
+    connectionTimeout: 12_000,
+    greetingTimeout: 12_000,
+    socketTimeout: 20_000,
   });
 
   await transporter.sendMail({ from, to, subject, text, html });
@@ -102,87 +92,30 @@ export async function sendMail({ to, subject, text, html }) {
   return { sent: true };
 }
 
-// ── Shared HTML template ───────────────────────────────────────────────────
-function renderWelcomeEmail({ heading, introLine, greetingName, bodyLine, loginUrl, email, tempPassword }) {
-  return `
-  <div style="background:#f1f5f9;padding:32px 16px;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-    <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(15,23,42,0.06);">
-
-      <!-- Header banner -->
-      <div style="background:linear-gradient(135deg,#0a1a3f,#132a5e);padding:32px;text-align:center;border-bottom:3px solid #c8102e;">
-        <div style="font-size:28px;line-height:1;margin-bottom:8px;">👋</div>
-        <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:700;letter-spacing:0.3px;">${escapeHtml(heading)}</h1>
-        <p style="color:#d4af37;margin:6px 0 0;font-size:14px;font-weight:600;">${escapeHtml(introLine)}</p>
-      </div>
-
-      <!-- Body -->
-      <div style="padding:32px;">
-        <p style="color:#0a1a3f;font-size:16px;margin:0 0 16px;">Hi <strong>${escapeHtml(greetingName)}</strong>, welcome aboard! 🎉</p>
-        <p style="color:#475569;font-size:14px;line-height:1.6;margin:0 0 24px;">${bodyLine}</p>
-
-        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-left:3px solid #d4af37;border-radius:10px;padding:4px;margin-bottom:24px;">
-          <table style="width:100%;border-collapse:collapse;">
-            <tr>
-              <td style="padding:12px 16px;color:#64748b;font-size:13px;font-weight:600;width:110px;">Email</td>
-              <td style="padding:12px 16px;font-size:13px;color:#0a1a3f;">${escapeHtml(email)}</td>
-            </tr>
-            <tr>
-              <td style="padding:12px 16px;color:#64748b;font-size:13px;font-weight:600;border-top:1px solid #e2e8f0;">Password</td>
-              <td style="padding:12px 16px;border-top:1px solid #e2e8f0;">
-                <code style="background:#e2e8f0;color:#0a1a3f;padding:3px 8px;border-radius:6px;font-size:13px;">${escapeHtml(tempPassword)}</code>
-              </td>
-            </tr>
-          </table>
-        </div>
-
-        <div style="text-align:center;margin:28px 0 8px;">
-          <a href="${loginUrl}" style="display:inline-block;background:linear-gradient(135deg,#c8102e,#8f0c22);color:#ffffff;text-decoration:none;padding:13px 28px;border-radius:8px;font-weight:600;font-size:14px;">
-            Open JustEdge login →
-          </a>
-        </div>
-
-        <p style="text-align:center;color:#c8102e;font-size:12.5px;margin:20px 0 0;">
-          ⚠ For your security, please change this password right after your first login.
-        </p>
-      </div>
-
-      <!-- Footer -->
-      <div style="background:#f8fafc;padding:20px 32px;text-align:center;border-top:1px solid #e2e8f0;">
-        <p style="color:#94a3b8;font-size:12px;margin:0;">Sent by JustEdge / Just Embedded — glad to have you here.</p>
-      </div>
-    </div>
-  </div>
-  `;
-}
-
 // ── Admin welcome email (called by adminController.createAdmin) ───────────────
 export async function sendAdminWelcomeEmail({ name, email, tempPassword, companyName }) {
   const loginUrl = getLoginUrl();
-  const subject = 'Welcome to JustEdge — your admin account is ready 🎉';
+  const subject = 'Welcome to JustEdge — your admin account';
+  const company = companyName || 'your company';
 
   const text = [
-    `Hello ${name},`,
+    `Welcome to JustEdge, ${name}!`,
     '',
-    `Welcome to JustEdge! A new admin account has been created for ${companyName || 'your company'}.`,
+    `Your admin account for ${company} is ready.`,
     '',
-    `Login URL : ${loginUrl}`,
-    `Email     : ${email}`,
-    `Password  : ${tempPassword}`,
+    `Email    : ${email}`,
+    `Password : ${tempPassword}`,
     '',
-    'Please sign in and change your password after first login.',
+    'Open the email and tap Log in to get started.',
     '',
-    "We're glad to have you on board.",
-    '— JustEdge / Just Embedded',
+    '— Just Embedded',
   ].join('\n');
 
-  const html = renderWelcomeEmail({
-    heading: 'Welcome to JustEdge',
-    introLine: 'Your admin account is ready',
-    greetingName: name,
-    bodyLine: `An admin account has been created for <strong>${escapeHtml(
-      companyName || 'your company'
-    )}</strong> on the JustEdge platform. You now have full access to manage your organization — use the credentials below to get started.`,
+  const html = buildWelcomeHtml({
     loginUrl,
+    headline: 'Welcome to JustEdge',
+    greeting: `Hello <strong style="color:#ffffff;">${escapeHtml(name)}</strong>,`,
+    body: `We're glad you're here. Your <strong style="color:#ffffff;">admin</strong> account for <strong style="color:#ffffff;">${escapeHtml(company)}</strong> is ready — monitor devices, manage users, and run your workspace from one place.`,
     email,
     tempPassword,
   });
@@ -193,38 +126,114 @@ export async function sendAdminWelcomeEmail({ name, email, tempPassword, company
 // ── User welcome email (called by userController.createUser) ──────────────────
 export async function sendUserWelcomeEmail({ name, email, tempPassword, adminName, companyName }) {
   const loginUrl = getLoginUrl();
-  const subject = 'Welcome to JustEdge — your account is ready 🎉';
+  const subject = 'Welcome to JustEdge — your account';
 
   const text = [
-    `Hello ${name},`,
+    `Welcome to JustEdge, ${name}!`,
     '',
-    `Welcome to JustEdge! ${adminName || 'Your admin'} has created an account for you${
-      companyName ? ` at ${companyName}` : ''
-    }.`,
+    `${adminName || 'Your admin'} created your account${companyName ? ` at ${companyName}` : ''}.`,
     '',
-    `Login URL : ${loginUrl}`,
-    `Email     : ${email}`,
-    `Password  : ${tempPassword}`,
+    `Email    : ${email}`,
+    `Password : ${tempPassword}`,
     '',
-    'Please sign in and change your password after first login.',
+    'Open the email and tap Log in to get started.',
     '',
-    "We're glad to have you on board.",
-    '— JustEdge / Just Embedded',
+    '— Just Embedded',
   ].join('\n');
 
-  const html = renderWelcomeEmail({
-    heading: 'Welcome to JustEdge',
-    introLine: 'Your account is ready',
-    greetingName: name,
-    bodyLine: `<strong>${escapeHtml(adminName || 'Your admin')}</strong> has set up a JustEdge account for you${
-      companyName ? ` at <strong>${escapeHtml(companyName)}</strong>` : ''
-    }. Sign in below to explore your dashboard and get started.`,
+  const byline = companyName
+    ? `<strong style="color:#ffffff;">${escapeHtml(adminName || 'Your admin')}</strong> invited you to <strong style="color:#ffffff;">${escapeHtml(companyName)}</strong>.`
+    : `<strong style="color:#ffffff;">${escapeHtml(adminName || 'Your admin')}</strong> invited you to JustEdge.`;
+
+  const html = buildWelcomeHtml({
     loginUrl,
+    headline: 'Welcome to JustEdge',
+    greeting: `Hello <strong style="color:#ffffff;">${escapeHtml(name)}</strong>,`,
+    body: `${byline} Your account is ready — sign in to view the sensors assigned to you.`,
     email,
     tempPassword,
   });
 
   return sendMail({ to: email, subject, text, html });
+}
+
+/** Dark blue / white brand palette (Just Embedded) + amber Log in button */
+function buildWelcomeHtml({ loginUrl, headline, greeting, body, email, tempPassword }) {
+  const href = loginUrl || '#';
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>${escapeHtml(headline)}</title>
+</head>
+<body style="margin:0;padding:0;background:#060d18;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#060d18;padding:40px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#0b1728;border-radius:18px;overflow:hidden;border:1px solid #1a3050;box-shadow:0 20px 50px rgba(0,0,0,.45);">
+          <!-- Header -->
+          <tr>
+            <td style="background:linear-gradient(135deg,#0a1f3d 0%,#0d2b52 55%,#123a6b 100%);padding:32px 36px;border-bottom:1px solid #1e3a5f;">
+              <div style="font-family:Georgia,'Times New Roman',serif;font-size:26px;font-weight:700;letter-spacing:0.04em;">
+                <span style="color:#3b82f6;">JUST</span><span style="color:#ef4444;"> EDGE</span>
+              </div>
+              <div style="font-family:system-ui,-apple-system,sans-serif;font-size:12px;color:#94a3b8;margin-top:6px;letter-spacing:0.12em;text-transform:uppercase;">
+                Just Embedded · Connected Systems
+              </div>
+            </td>
+          </tr>
+          <!-- Body -->
+          <tr>
+            <td style="padding:32px 36px 12px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#e2e8f0;">
+              <h1 style="margin:0 0 12px;font-size:24px;font-weight:700;color:#ffffff;line-height:1.25;">
+                ${escapeHtml(headline)}
+              </h1>
+              <p style="margin:0 0 10px;font-size:15px;line-height:1.6;color:#cbd5e1;">
+                ${greeting}
+              </p>
+              <p style="margin:0 0 22px;font-size:14.5px;line-height:1.65;color:#94a3b8;">
+                ${body}
+              </p>
+
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin:0 0 28px;background:#071322;border:1px solid #1e3a5f;border-radius:12px;">
+                <tr>
+                  <td style="padding:14px 16px;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;width:100px;border-bottom:1px solid #1e3a5f;">Email</td>
+                  <td style="padding:14px 16px;font-size:14px;color:#f8fafc;border-bottom:1px solid #1e3a5f;">${escapeHtml(email)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:14px 16px;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;">Password</td>
+                  <td style="padding:14px 16px;font-size:14px;color:#f8fafc;font-family:ui-monospace,Consolas,monospace;letter-spacing:0.04em;">${escapeHtml(tempPassword)}</td>
+                </tr>
+              </table>
+
+              <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 auto 8px;">
+                <tr>
+                  <td align="center" bgcolor="#2563eb" style="border-radius:10px;box-shadow:0 8px 24px rgba(37,99,235,.35);">
+                    <a href="${href}" target="_blank"
+                       style="display:inline-block;padding:14px 36px;font-family:system-ui,-apple-system,sans-serif;font-size:15px;font-weight:700;color:#ffffff;text-decoration:none;border-radius:10px;background:#2563eb;">
+                      Log in
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding:20px 36px 28px;font-family:system-ui,-apple-system,sans-serif;font-size:12px;color:#64748b;line-height:1.5;border-top:1px solid #1a3050;">
+              Connected systems. Built right.<br/>
+              <span style="color:#475569;">— Just Embedded</span>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `.trim();
 }
 
 function escapeHtml(value) {
