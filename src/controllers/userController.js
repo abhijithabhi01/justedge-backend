@@ -43,12 +43,24 @@ export async function createUser(req, res) {
   const { name, email, phone, permissions } = req.body;
   if (!name || !email) return res.status(400).json({ error: 'name and email are required' });
 
-  const existing = await UserAccount.findOne({ email: email.toLowerCase().trim() });
-  if (existing) return res.status(409).json({ error: 'A user account with that email already exists' });
+  const emailNorm = email.toLowerCase().trim();
+
+  const existingUser = await UserAccount.findOne({ email: emailNorm });
+  if (existingUser) {
+    return res.status(409).json({ error: 'A user account with that email already exists' });
+  }
+
+  // Same email cannot be used for both Admin and User logins
+  const existingAdmin = await AdminAccount.findOne({ email: emailNorm });
+  if (existingAdmin) {
+    return res.status(409).json({
+      error: 'This email is already used by an admin account. Choose a different email for the user.',
+    });
+  }
 
   const user = new UserAccount({
     name: name.trim(),
-    email: email.toLowerCase().trim(),
+    email: emailNorm,
     phone: phone?.trim() || '',
     status: 'invited',
     permissions: defaultUserPermissions(permissions || {}),
@@ -83,7 +95,22 @@ export async function updateUser(req, res) {
 
   const { name, email, phone } = req.body;
   if (name !== undefined) user.name = name.trim();
-  if (email !== undefined) user.email = email.toLowerCase().trim();
+  if (email !== undefined) {
+    const emailNorm = email.toLowerCase().trim();
+    if (emailNorm !== user.email) {
+      const takenUser = await UserAccount.findOne({ email: emailNorm, _id: { $ne: user._id } });
+      if (takenUser) {
+        return res.status(409).json({ error: 'A user account with that email already exists' });
+      }
+      const takenAdmin = await AdminAccount.findOne({ email: emailNorm });
+      if (takenAdmin) {
+        return res.status(409).json({
+          error: 'This email is already used by an admin account. Choose a different email.',
+        });
+      }
+      user.email = emailNorm;
+    }
+  }
   if (phone !== undefined) user.phone = phone.trim();
 
   await user.save();

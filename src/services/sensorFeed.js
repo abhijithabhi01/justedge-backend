@@ -1,24 +1,9 @@
-// Live sensor data source. Right now this simulates readings in-process so
-// the frontend/dashboards can be built against a stable shape before AWS is
-// wired up. Swap point: when IoT/sensor data actually lives in AWS, replace
-// the body of simulateReading() with AWS SDK calls (IoT Core / Timestream /
-// whatever the ingest pipeline lands on) and keep the same return shape —
-// nothing in controllers/routes needs to change.
-//
-// Toggle with SENSOR_DATA_SOURCE=aws once that's ready; today anything but
-// 'aws' falls back to the simulator.
-//
-// Registered boards now live in Mongo (models/Device.js) instead of the old
-// hardcoded FLEET array — deviceController.js queries Device and passes a
-// lightweight { id, name, type } object in here per device. `type` is the
-// device's boardId; profileFor() maps it to a simulation profile, falling
-// back to a generic one for board types that don't have a dedicated profile
-// (e.g. new types added via the board catalog).
 import {
   getLatestReading,
   getLatestConnectionStatus,
   resolveDeviceStatus,
   normalise,
+  extractCoords,
 } from './iotFeed.js';
 
 const SOURCE = process.env.SENSOR_DATA_SOURCE || 'mock';
@@ -177,40 +162,52 @@ function awsSensorsFromItem(item) {
 
   const sensors = [];
 
-  // Temperature — may live at top level or inside extras{}
   const temp = item.temperature ?? item.extras?.temperature ?? null;
-  if (temp !== null) {
+  if (temp !== null && temp !== undefined && Number.isFinite(Number(temp))) {
     sensors.push({ key: 'temp_c', label: 'Temperature', unit: '°C', value: Number(temp) });
   }
 
-  // Humidity
   const hum = item.humidity ?? item.extras?.humidity ?? null;
-  if (hum !== null) {
+  if (hum !== null && hum !== undefined && Number.isFinite(Number(hum))) {
     sensors.push({ key: 'humidity_pct', label: 'Humidity', unit: '%', value: Number(hum) });
   }
 
-  // Pressure
   const pressure = item.pressure ?? item.extras?.pressure ?? null;
-  if (pressure !== null) {
+  if (pressure !== null && pressure !== undefined && Number.isFinite(Number(pressure))) {
     sensors.push({ key: 'pressure_hpa', label: 'Pressure', unit: 'hPa', value: Number(pressure) });
   }
 
-  // Battery voltage / percentage — boards may report as batteryVoltage or battery
   const batt = item.battery ?? item.batteryVoltage ?? item.extras?.battery ?? null;
-  if (batt !== null) {
-    // Values > 5 are treated as a percentage already; otherwise assume volts (3.0-4.2V range)
-    const pct = batt > 5 ? Number(batt) : Math.round(((Number(batt) - 3.0) / (4.2 - 3.0)) * 100);
+  if (batt !== null && batt !== undefined && Number.isFinite(Number(batt))) {
+    const pct = Number(batt) > 5 ? Number(batt) : Math.round(((Number(batt) - 3.0) / (4.2 - 3.0)) * 100);
     sensors.push({ key: 'battery_pct', label: 'Battery', unit: '%', value: Math.max(0, Math.min(100, pct)) });
   }
 
-  const lat = item.latitude ?? item.lat ?? item.extras?.latitude ?? null;
-  const lng = item.longitude ?? item.lng ?? item.lon ?? item.extras?.longitude ?? null;
-  if (lat != null && Number.isFinite(Number(lat))) {
-    sensors.push({ key: 'latitude', label: 'Latitude', unit: '°', value: Number(lat) });
+  const coords = typeof extractCoords === 'function' ? extractCoords(item) : { lat: null, lng: null };
+  if (coords.lat != null) {
+    sensors.push({ key: 'latitude', label: 'Latitude', unit: '°', value: coords.lat });
   }
-  if (lng != null && Number.isFinite(Number(lng))) {
-    sensors.push({ key: 'longitude', label: 'Longitude', unit: '°', value: Number(lng) });
+  if (coords.lng != null) {
+    sensors.push({ key: 'longitude', label: 'Longitude', unit: '°', value: coords.lng });
   }
+
+  // Extra numeric Dynamo attributes → extra sensor channels on the card
+  const skip = new Set([
+    'deviceId', 'deviceName', 'timestamp', 'type', 'status', 'locations', 'location',
+    'latitude', 'longitude', 'lat', 'lng', 'lon', 'temperature', 'humidity', 'pressure',
+    'battery', 'batteryVoltage', 'extras', 'site', 'source', 'lastSeen', 'fw', 'seq',
+  ]);
+  for (const [k, v] of Object.entries(item)) {
+    if (skip.has(k) || v == null || typeof v === 'object') continue;
+    if (!Number.isFinite(Number(v))) continue;
+    sensors.push({
+      key: k,
+      label: String(k).replace(/_/g, ' '),
+      unit: '',
+      value: Number(v),
+    });
+  }
+
   return sensors;
 }
 

@@ -1,173 +1,143 @@
-/**
- * seed-aws-locations.js
- *
- * Updates install locations for the 4 physical AWS boards in DynamoDB.
- * Matches awsDeviceId values from seed-aws-devices.js exactly.
- *
- * Usage:
- *   node scripts/seed-aws-locations.js
- *
- * Environment variables (from .env):
- *   AWS_REGION        — e.g. ap-south-1
- *   AWS_ACCESS_KEY_ID
- *   AWS_SECRET_ACCESS_KEY
- *   DYNAMO_TABLE      — your DynamoDB table name (e.g. iot-saas-platform or SensorData)
- *
- * The script is idempotent — safe to run multiple times.
- * Each run overwrites the location fields for the given deviceId.
- */
-
 import 'dotenv/config';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, UpdateCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
+import {
+  DynamoDBDocumentClient,
+  PutCommand,
+  QueryCommand,
+} from '@aws-sdk/lib-dynamodb';
 
-// ── DynamoDB client setup ────────────────────────────────────────────────────
 const client = new DynamoDBClient({
-  region: process.env.AWS_REGION || 'ap-south-1',
+  region: process.env.AWS_REGION || 'ap-southeast-2',
   credentials: {
-    accessKeyId:     process.env.AWS_ACCESS_KEY_ID,
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   },
 });
 
-const ddb = DynamoDBDocumentClient.from(client);
+const ddb = DynamoDBDocumentClient.from(client, {
+  unmarshallOptions: { wrapNumbers: false },
+});
 
-const TABLE = process.env.DYNAMO_TABLE || 'iot-saas-platform';
+const TABLE =
+  process.env.DYNAMODB_TABLE_NAME ||
+  process.env.DYNAMO_TABLE ||
+  'GPS_Device_Data';
 
-// ── Location data — matches awsDeviceId from seed-aws-devices.js ─────────────
-// Coordinates are real Bengaluru neighbourhood centroids.
-const LOCATIONS = [
+function deviceKeyName() {
+  if (process.env.DYNAMODB_DEVICE_KEY) return process.env.DYNAMODB_DEVICE_KEY.trim();
+  if (/gps/i.test(TABLE) || TABLE === 'GPS_Device_Data') return 'deviceName';
+  return 'deviceId';
+}
+
+/**
+ * Devices to seed. `id` is stored under the partition key (deviceName / deviceId).
+ * Adjust coordinates / names to match your physical boards.
+ */
+const DEVICES = [
   {
-    deviceId: 'Susima_IoT1',
-    lat:      12.9352,
-    lng:      77.6245,
-    site:     'Koramangala',
-    city:     'Bengaluru',
-    state:    'Karnataka',
-    country:  'India',
+    id: 'ABHIJITH',
+    lat: 12.2958,
+    lng: 76.6394,
+    site: 'Mysore · sample',
+    temperature: 28.5,
   },
-  {
-    deviceId: 'DynamoDB_2',
-    lat:      13.0358,
-    lng:      77.5970,
-    site:     'Hebbal',
-    city:     'Bengaluru',
-    state:    'Karnataka',
-    country:  'India',
-  },
-  {
-    deviceId: 'DynamoDB_3',
-    lat:      12.9716,
-    lng:      77.5946,
-    site:     'MG Road',
-    city:     'Bengaluru',
-    state:    'Karnataka',
-    country:  'India',
-  },
-  {
-    deviceId: 'DynamoDB_4',
-    lat:      13.0297,
-    lng:      77.5469,
-    site:     'Yeshwanthpur',
-    city:     'Bengaluru',
-    state:    'Karnataka',
-    country:  'India',
-  },
+  // Add more GPS_Device_Data deviceNames here as needed:
+  // { id: 'WAREHOUSE_1', lat: 12.97, lng: 77.59, site: 'Bengaluru', temperature: 26.0 },
 ];
 
-// ── Helper: check if device record exists in DynamoDB ────────────────────────
-async function deviceExists(deviceId) {
+async function countItemsForDevice(id) {
+  const keyName = deviceKeyName();
   try {
-    const res = await ddb.send(new GetCommand({
-      TableName: TABLE,
-      Key: { deviceId },
-    }));
-    return !!res.Item;
+    const res = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE,
+        KeyConditionExpression: `${keyName} = :id`,
+        ExpressionAttributeValues: { ':id': id },
+        Select: 'COUNT',
+        Limit: 1,
+      })
+    );
+    return res.Count ?? 0;
   } catch (err) {
-    // If the table uses a different key schema this will throw — surface the error
-    throw new Error(`GetCommand failed for ${deviceId}: ${err.message}`);
+    console.warn(`[warn] query ${id}: ${err.message}`);
+    return -1;
   }
 }
 
-// ── Helper: update location fields on a device record ────────────────────────
-async function updateLocation(loc) {
-  const now = new Date().toISOString();
+/**
+ * GPS_Device_Data uses composite key (deviceName, timestamp).
+ * We always Put a new telemetry/location row with a fresh timestamp.
+ */
+async function putReading(device) {
+  const keyName = deviceKeyName();
+  const ts = String(Date.now()); // sort key — must exist on GPS_Device_Data
 
-  await ddb.send(new UpdateCommand({
-    TableName: TABLE,
-    Key: { deviceId: loc.deviceId },
+  const item = {
+    [keyName]: device.id,
+    // Also set the alternate name so readers that look for either key work
+    deviceName: device.id,
+    deviceId: device.id,
+    timestamp: ts,
+    temperature: device.temperature ?? null,
+    locations: [
+      {
+        lat: device.lat,
+        lng: device.lng,
+        site: device.site || '',
+      },
+    ],
+    latitude: device.lat,
+    longitude: device.lng,
+    site: device.site || '',
+    status: 'ONLINE',
+    type: 'telemetry',
+    source: 'justedge-seed',
+  };
 
-    // Only touch location fields — does NOT overwrite telemetry or other attrs
-    UpdateExpression: `SET
-      #loc.lat       = :lat,
-      #loc.lng       = :lng,
-      #loc.site      = :site,
-      #loc.city      = :city,
-      #loc.#st       = :state,
-      #loc.country   = :country,
-      updatedAt      = :updatedAt`,
-
-    ExpressionAttributeNames: {
-      '#loc': 'location',
-      '#st':  'state',      // 'state' is a reserved word in DynamoDB
-    },
-
-    ExpressionAttributeValues: {
-      ':lat':       loc.lat,
-      ':lng':       loc.lng,
-      ':site':      loc.site,
-      ':city':      loc.city,
-      ':state':     loc.state,
-      ':country':   loc.country,
-      ':updatedAt': now,
-    },
-
-    // Only update if the record already exists — do NOT create phantom records
-    ConditionExpression: 'attribute_exists(deviceId)',
-  }));
+  await ddb.send(
+    new PutCommand({
+      TableName: TABLE,
+      Item: item,
+    })
+  );
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
-  console.log(`[seed-aws-locations] table  : ${TABLE}`);
-  console.log(`[seed-aws-locations] region : ${process.env.AWS_REGION || 'ap-south-1'}`);
-  console.log(`[seed-aws-locations] devices: ${LOCATIONS.length}\n`);
+  const keyName = deviceKeyName();
+  console.log(`[seed-aws-devices] table   : ${TABLE}`);
+  console.log(`[seed-aws-devices] region  : ${process.env.AWS_REGION || 'ap-southeast-2'}`);
+  console.log(`[seed-aws-devices] key     : ${keyName}`);
+  console.log(`[seed-aws-devices] devices : ${DEVICES.length}\n`);
 
   let ok = 0;
-  let skipped = 0;
   let failed = 0;
 
-  for (const loc of LOCATIONS) {
+  for (const device of DEVICES) {
     try {
-      // Guard: skip if the device row doesn't exist yet
-      const exists = await deviceExists(loc.deviceId);
-      if (!exists) {
-        console.warn(`[SKIP]   ${loc.deviceId} — record not found in ${TABLE}. Run seed-aws-devices.js first.`);
-        skipped++;
-        continue;
+      const existing = await countItemsForDevice(device.id);
+      if (existing === 0) {
+        console.log(`[info]  ${device.id} — no prior rows (will create first)`);
+      } else if (existing > 0) {
+        console.log(`[info]  ${device.id} — table already has rows (appending new reading)`);
       }
 
-      await updateLocation(loc);
-      console.log(`[OK]     ${loc.deviceId} → ${loc.site}, ${loc.city} (${loc.lat}, ${loc.lng})`);
+      await putReading(device);
+      console.log(
+        `[OK]    ${device.id} → ${device.site || '—'} (${device.lat}, ${device.lng}) temp=${device.temperature ?? '—'}`
+      );
       ok++;
     } catch (err) {
-      if (err.name === 'ConditionalCheckFailedException') {
-        console.warn(`[SKIP]   ${loc.deviceId} — ConditionExpression failed (record missing?)`);
-        skipped++;
-      } else {
-        console.error(`[FAIL]   ${loc.deviceId} — ${err.message}`);
-        failed++;
-      }
+      console.error(`[FAIL]  ${device.id} — ${err.message}`);
+      failed++;
     }
   }
 
-  console.log(`\n[seed-aws-locations] done — ${ok} updated, ${skipped} skipped, ${failed} failed.`);
-
+  console.log(`\n[seed-aws-devices] done — ${ok} written, ${failed} failed.`);
   if (failed > 0) process.exit(1);
   process.exit(0);
 }
 
 main().catch((err) => {
-  console.error('[seed-aws-locations] fatal:', err);
+  console.error('[seed-aws-devices] fatal:', err);
   process.exit(1);
 });

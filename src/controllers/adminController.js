@@ -51,12 +51,21 @@ export async function createAdmin(req, res) {
   const { name, email, phone, companyName, twoFactor, tempPassword } = req.body;
   if (!name || !email || !companyName) return res.status(400).json({ error: 'name, email and companyName are required' });
 
-  const existing = await AdminAccount.findOne({ email: email.toLowerCase().trim() });
+  const emailNorm = email.toLowerCase().trim();
+
+  const existing = await AdminAccount.findOne({ email: emailNorm });
   if (existing) return res.status(409).json({ error: 'An admin account with that email already exists' });
+
+  const existingUser = await UserAccount.findOne({ email: emailNorm });
+  if (existingUser) {
+    return res.status(409).json({
+      error: 'This email is already used by a user account. Choose a different email for the admin.',
+    });
+  }
 
   const admin = new AdminAccount({
     name: name.trim(),
-    email: email.toLowerCase().trim(),
+    email: emailNorm,
     phone: phone?.trim() || '',
     companyName: companyName.trim(),
     role: 'Admin',
@@ -71,16 +80,27 @@ export async function createAdmin(req, res) {
   await admin.setPassword(finalTempPassword);
   await admin.save();
 
-  // Send welcome email with login credentials — fire-and-forget (never block the response)
-  sendAdminWelcomeEmail({
-    name:        admin.name,
-    email:       admin.email,
-    tempPassword: finalTempPassword,
-    companyName: admin.companyName,
-  }).catch((err) => console.error('[email] sendAdminWelcomeEmail failed:', err.message));
+  // Welcome email with login URL + credentials (SMTP via env; does not fail the create)
+  let emailResult = { sent: false };
+  try {
+    emailResult = await sendAdminWelcomeEmail({
+      name: admin.name,
+      email: admin.email,
+      tempPassword: finalTempPassword,
+      companyName: admin.companyName,
+    });
+  } catch (err) {
+    console.error('[email] sendAdminWelcomeEmail failed:', err.message);
+    emailResult = { sent: false, reason: err.message };
+  }
 
   await logActivity(req, { action: 'Created admin account', target: `${admin.name} (${admin.role})`, targetType: 'admin', category: 'admin', severity: 'warn' });
-  res.status(201).json({ admin: admin.toSafeJSON(), tempPassword: finalTempPassword });
+  res.status(201).json({
+    admin: admin.toSafeJSON(),
+    tempPassword: finalTempPassword,
+    emailSent: !!emailResult?.sent,
+    emailError: emailResult?.sent ? undefined : (emailResult?.reason || null),
+  });
 }
 
 export async function updateAdmin(req, res) {
@@ -90,7 +110,22 @@ export async function updateAdmin(req, res) {
 
   const { name, email, phone, companyName, status, twoFactor } = req.body;
   if (name !== undefined) admin.name = name.trim();
-  if (email !== undefined) admin.email = email.toLowerCase().trim();
+  if (email !== undefined) {
+    const emailNorm = email.toLowerCase().trim();
+    if (emailNorm !== admin.email) {
+      const takenAdmin = await AdminAccount.findOne({ email: emailNorm, _id: { $ne: admin._id } });
+      if (takenAdmin) {
+        return res.status(409).json({ error: 'An admin account with that email already exists' });
+      }
+      const takenUser = await UserAccount.findOne({ email: emailNorm });
+      if (takenUser) {
+        return res.status(409).json({
+          error: 'This email is already used by a user account. Choose a different email.',
+        });
+      }
+      admin.email = emailNorm;
+    }
+  }
   if (phone !== undefined) admin.phone = phone.trim();
   if (companyName !== undefined) admin.companyName = companyName.trim();
   if (status !== undefined) admin.status = status;
