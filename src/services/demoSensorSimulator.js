@@ -1,56 +1,14 @@
 /**
  * In-process demo GPS + temperature writers → MongoDB `demodata` only.
+ * GPS follows Kochi ↔ Bengaluru and back.
  * Started automatically with the API when DEMO_SENSORS_ENABLED is not "false".
  * Does not write to AWS / DynamoDB.
  */
+import mongoose from 'mongoose';
 import { DemoData } from '../models/DemoData.js';
+import { nextGpsPoint } from './gpsRoute.js';
 
-const GPS_ROUTE = [
-  { lat: 12.2958, lng: 76.6394 },
-  { lat: 12.33, lng: 76.68 },
-  { lat: 12.423, lng: 76.703 },
-  { lat: 12.522, lng: 76.897 },
-  { lat: 12.585, lng: 77.045 },
-  { lat: 12.652, lng: 77.207 },
-  { lat: 12.72, lng: 77.28 },
-  { lat: 12.796, lng: 77.386 },
-  { lat: 12.907, lng: 77.482 },
-  { lat: 12.917, lng: 77.56 },
-  { lat: 12.995, lng: 77.67 },
-  { lat: 13.0169, lng: 77.6954 },
-];
-
-const STEPS = 20;
-
-function buildPath() {
-  const points = [];
-  for (let i = 0; i < GPS_ROUTE.length - 1; i++) {
-    const a = GPS_ROUTE[i];
-    const b = GPS_ROUTE[i + 1];
-    for (let s = 0; s < STEPS; s++) {
-      const t = s / STEPS;
-      points.push({
-        lat: a.lat + (b.lat - a.lat) * t,
-        lng: a.lng + (b.lng - a.lng) * t,
-      });
-    }
-  }
-  points.push({ ...GPS_ROUTE[GPS_ROUTE.length - 1] });
-  return points;
-}
-
-const PATH = buildPath();
-let pathIndex = 0;
 let timer = null;
-
-function nextGps() {
-  const p = PATH[pathIndex % PATH.length];
-  pathIndex += 1;
-  return {
-    lat: p.lat + (Math.random() - 0.5) * 0.0015,
-    lng: p.lng + (Math.random() - 0.5) * 0.0015,
-  };
-}
 
 function nextTemp() {
   const base = 27.2;
@@ -60,7 +18,7 @@ function nextTemp() {
 }
 
 async function tick() {
-  const gps = nextGps();
+  const gps = nextGpsPoint({ jitter: true });
   const tempGps = nextTemp();
   const tempWh = Math.round((26.5 + (Math.random() - 0.5) * 1.5) * 10) / 10;
 
@@ -74,9 +32,15 @@ async function tick() {
       lng: gps.lng,
       temp: tempGps,
       humidity: Math.round(45 + Math.random() * 15),
-      battery: Math.max(40, 85 - (pathIndex % 40)),
+      battery: Math.max(40, 85 - (gps.index % 40)),
       status: 'online',
-      meta: { source: 'demo-simulator', type: 'gps' },
+      meta: {
+        source: 'demo-simulator',
+        type: 'gps',
+        leg: gps.leg,
+        direction: gps.direction,
+        route: 'Kochi↔Bengaluru',
+      },
     },
     {
       kind: 'reading',
@@ -112,6 +76,7 @@ export function startDemoSensorSimulator() {
   const intervalMs = Number(process.env.DEMO_SENSOR_INTERVAL_MS || 2000);
 
   const run = () => {
+    if (mongoose.connection.readyState !== 1) return;
     tick().catch((err) =>
       console.error('[demo-sensors] tick failed:', err.message)
     );
@@ -122,7 +87,7 @@ export function startDemoSensorSimulator() {
   if (typeof timer.unref === 'function') timer.unref();
 
   console.log(
-    `[demo-sensors] writing GPS + temperature to Mongo demodata every ${intervalMs}ms (no AWS)`
+    `[demo-sensors] Kochi↔Bengaluru GPS + temperature → demodata every ${intervalMs}ms`
   );
 }
 
@@ -131,4 +96,4 @@ export function stopDemoSensorSimulator() {
     clearInterval(timer);
     timer = null;
   }
-}   
+}

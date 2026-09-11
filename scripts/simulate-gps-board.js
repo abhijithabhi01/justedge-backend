@@ -1,27 +1,22 @@
 /**
  * simulate-gps-board.js
  *
- * Acts as a GPS board (ESP32-style) writing live location into DynamoDB
- * while travelling Mysuru → Krishnarajapuram (Bengaluru) along NH 275.
+ * Pushes live GPS telemetry into DynamoDB table GPS_Device_Data while the
+ * board travels Kochi → Bengaluru → Kochi (NH 544 / NH 48 corridor).
  *
- * Payload shape:
- *   {
- *     "device_id": "ESP32_001",
- *     "latitude": 12.9716,
- *     "longitude": 77.5946,
- *     "timestamp": 1756270000
- *   }
+ * Schema matches your existing boards (e.g. CHAITHANYA):
+ *   deviceName (partition key), timestamp (sort key),
+ *   locations: [{ lat, lng }], temperature, battery, status, type
  *
  * Usage:
- *   node scripts/simulate-gps-board.js
- *   node scripts/simulate-gps-board.js --once
- *   node scripts/simulate-gps-board.js --device ESP32_GPS_01
- *   node scripts/simulate-gps-board.js --interval 3000
+ *   node scripts/simulate-gps-board.js --device ONENESS9845
+ *   node scripts/simulate-gps-board.js --device ONENESS9845 --interval 3000
+ *   node scripts/simulate-gps-board.js --device ONENESS9845 --once
  *
- * Env:
+ * Env (from .env):
  *   AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
- *   DYNAMODB_TABLE_NAME   (default: SensorData)
- *   GPS_DEVICE_ID         (default: ESP32_001)
+ *   DYNAMODB_TABLE_NAME   (default: GPS_Device_Data)
+ *   DYNAMODB_DEVICE_KEY    (default: deviceName for GPS tables)
  */
 
 import 'dotenv/config';
@@ -36,63 +31,79 @@ const intervalFlag = args.indexOf('--interval');
 const DEVICE_ID =
   (deviceFlag >= 0 && args[deviceFlag + 1]) ||
   process.env.GPS_DEVICE_ID ||
-  'ESP32_001';
+  'ONENESS9845';
 
 const INTERVAL_MS = Number(
   (intervalFlag >= 0 && args[intervalFlag + 1]) ||
     process.env.GPS_INTERVAL_MS ||
-    5000
+    3000
 );
 
-const TABLE = process.env.DYNAMODB_TABLE_NAME || 'SensorData';
+const TABLE =
+  process.env.DYNAMODB_TABLE_NAME ||
+  process.env.DYNAMO_TABLE ||
+  'GPS_Device_Data';
+
 const REGION = process.env.AWS_REGION || 'ap-southeast-2';
 
-/**
- * Mysuru → Krishnarajapuram via NH 275 corridor
- * (same highway as Google Maps “via NH 275”, ~166 km)
- */
-const ROUTE = [
-  { name: 'Mysuru city', lat: 12.2958, lng: 76.6394 },
-  { name: 'Mysuru outer / Bannur Rd approach', lat: 12.3300, lng: 76.6800 },
-  { name: 'Srirangapatna', lat: 12.4230, lng: 76.7030 },
-  { name: 'Mandya', lat: 12.5220, lng: 76.8970 },
-  { name: 'Maddur', lat: 12.5850, lng: 77.0450 },
-  { name: 'Channapatna', lat: 12.6520, lng: 77.2070 },
-  { name: 'Ramanagara', lat: 12.7200, lng: 77.2800 },
-  { name: 'Bidadi', lat: 12.7960, lng: 77.3860 },
-  { name: 'Kengeri / Mysore Road', lat: 12.9070, lng: 77.4820 },
-  { name: 'Nice Road / south Bengaluru', lat: 12.9170, lng: 77.5600 },
-  { name: 'Silk Board approach', lat: 12.9170, lng: 77.6230 },
-  { name: 'Outer Ring / KR Puram approach', lat: 12.9950, lng: 77.6700 },
-  { name: 'Krishnarajapuram, Bengaluru', lat: 13.0169, lng: 77.6954 },
+function deviceKeyName() {
+  if (process.env.DYNAMODB_DEVICE_KEY) return process.env.DYNAMODB_DEVICE_KEY.trim();
+  if (/gps/i.test(TABLE) || TABLE === 'GPS_Device_Data') return 'deviceName';
+  return 'deviceId';
+}
+
+/** Kochi → Bengaluru corridor */
+const ROUTE_OUT = [
+  { name: 'Kochi', lat: 9.9312, lng: 76.2673 },
+  { name: 'Aluva', lat: 10.1004, lng: 76.357 },
+  { name: 'Angamaly', lat: 10.1906, lng: 76.386 },
+  { name: 'Chalakudy', lat: 10.301, lng: 76.337 },
+  { name: 'Thrissur', lat: 10.5276, lng: 76.2144 },
+  { name: 'Wadakkanchery', lat: 10.654, lng: 76.247 },
+  { name: 'Palakkad', lat: 10.7867, lng: 76.6548 },
+  { name: 'Coimbatore', lat: 11.0168, lng: 76.9558 },
+  { name: 'Avinashi', lat: 11.191, lng: 77.268 },
+  { name: 'Erode', lat: 11.341, lng: 77.717 },
+  { name: 'Salem', lat: 11.6643, lng: 78.146 },
+  { name: 'Dharmapuri', lat: 12.1357, lng: 78.158 },
+  { name: 'Krishnagiri', lat: 12.5186, lng: 78.2137 },
+  { name: 'Hosur', lat: 12.7409, lng: 77.8253 },
+  { name: 'Electronic City', lat: 12.845, lng: 77.66 },
+  { name: 'Bengaluru', lat: 12.9716, lng: 77.5946 },
 ];
 
-/** denser points so the marker moves smoothly along the highway */
-const STEPS_PER_LEG = 12;
+const STEPS_PER_LEG = 10;
 
-function buildPath() {
+function interpolate(route, direction) {
   const points = [];
-  for (let i = 0; i < ROUTE.length - 1; i++) {
-    const a = ROUTE[i];
-    const b = ROUTE[i + 1];
+  for (let i = 0; i < route.length - 1; i++) {
+    const a = route[i];
+    const b = route[i + 1];
     for (let s = 0; s < STEPS_PER_LEG; s++) {
       const t = s / STEPS_PER_LEG;
-      // small jitter so it feels like real GPS, still stays near the highway
       const jitterLat = (Math.random() - 0.5) * 0.0012;
       const jitterLng = (Math.random() - 0.5) * 0.0012;
       points.push({
         lat: a.lat + (b.lat - a.lat) * t + jitterLat,
         lng: a.lng + (b.lng - a.lng) * t + jitterLng,
         leg: a.name,
+        direction,
       });
     }
   }
-  const end = ROUTE[ROUTE.length - 1];
-  points.push({ lat: end.lat, lng: end.lng, leg: end.name });
+  const end = route[route.length - 1];
+  points.push({ lat: end.lat, lng: end.lng, leg: end.name, direction });
   return points;
 }
 
+function buildPath() {
+  const outbound = interpolate(ROUTE_OUT, 'outbound');
+  const inbound = interpolate([...ROUTE_OUT].reverse(), 'return');
+  return [...outbound, ...inbound];
+}
+
 const PATH = buildPath();
+const KEY = deviceKeyName();
 
 const client = DynamoDBDocumentClient.from(
   new DynamoDBClient({
@@ -105,22 +116,35 @@ const client = DynamoDBDocumentClient.from(
   { unmarshallOptions: { wrapNumbers: false } }
 );
 
-async function putReading({ latitude, longitude, leg, index, total }) {
-  const timestamp = Math.floor(Date.now() / 1000);
+function nextTemp() {
+  const base = 28;
+  const drift = Math.sin(Date.now() / 60000) * 2;
+  return Math.round((base + drift + (Math.random() - 0.5) * 1.5) * 10) / 10;
+}
+
+async function putReading({ latitude, longitude, leg, direction, index, total }) {
+  const ts = String(Date.now());
+  const lat = Number(latitude.toFixed(6));
+  const lng = Number(longitude.toFixed(6));
+  const battery = Math.max(35, 92 - Math.floor((index / total) * 25));
 
   const item = {
-    // Required GPS schema
-    device_id: DEVICE_ID,
-    latitude: Number(latitude.toFixed(6)),
-    longitude: Number(longitude.toFixed(6)),
-    timestamp,
-
-    // Compatibility with existing SensorData / JustEdge
+    [KEY]: DEVICE_ID,
+    deviceName: DEVICE_ID,
     deviceId: DEVICE_ID,
-    type: 'telemetry',
+    timestamp: ts,
+    temperature: nextTemp(),
+    battery,
+    locations: [{ lat, lng, site: leg || '' }],
+    latitude: lat,
+    longitude: lng,
+    site: leg || '',
     status: 'ONLINE',
+    type: 'telemetry',
+    source: 'justedge-gps-simulator',
+    route: 'Kochi↔Bengaluru',
+    direction: direction || null,
     leg: leg || null,
-    route: 'Mysuru→KR Puram (NH275)',
     seq: index + 1,
     total_points: total,
   };
@@ -146,13 +170,17 @@ async function main() {
   }
 
   console.log('─────────────────────────────────────────────');
-  console.log(' GPS board simulator');
-  console.log(` device_id : ${DEVICE_ID}`);
-  console.log(` table     : ${TABLE}`);
-  console.log(` region    : ${REGION}`);
-  console.log(` route     : Mysuru → Krishnarajapuram via NH275 (${PATH.length} points)`);
-  console.log(` interval  : ${INTERVAL_MS} ms`);
-  console.log(` mode      : ${ONCE ? 'single point' : 'full trip loop'}`);
+  console.log(' GPS board simulator → AWS DynamoDB');
+  console.log(` deviceName : ${DEVICE_ID}`);
+  console.log(` table      : ${TABLE}`);
+  console.log(` key        : ${KEY}`);
+  console.log(` region     : ${REGION}`);
+  console.log(` route      : Kochi ↔ Bengaluru (${PATH.length} points)`);
+  console.log(` interval   : ${INTERVAL_MS} ms`);
+  console.log(` mode       : ${ONCE ? 'single point' : 'continuous loop'}`);
+  console.log('─────────────────────────────────────────────');
+  console.log('After a few puts, refresh Add sensor → Live AWS device list.');
+  console.log(`Select "${DEVICE_ID}" and register the board in JustEdge.`);
   console.log('─────────────────────────────────────────────');
 
   let i = 0;
@@ -164,12 +192,13 @@ async function main() {
         latitude: p.lat,
         longitude: p.lng,
         leg: p.leg,
+        direction: p.direction,
         index: i % PATH.length,
         total: PATH.length,
       });
       console.log(
         `[${new Date().toLocaleTimeString()}] #${item.seq}/${PATH.length}  ` +
-          `${item.latitude}, ${item.longitude}  (${p.leg})`
+          `${item.latitude}, ${item.longitude}  (${p.leg} · ${p.direction})  batt=${item.battery}`
       );
     } catch (err) {
       console.error('Put failed:', err.message);
@@ -179,8 +208,8 @@ async function main() {
 
     i += 1;
     if (i % PATH.length === 0) {
-      console.log('… arrived Krishnarajapuram — restarting trip from Mysuru in 15s');
-      await sleep(15000);
+      console.log('… completed Kochi↔Bengaluru loop — restarting in 10s');
+      await sleep(10000);
     } else {
       await sleep(INTERVAL_MS);
     }

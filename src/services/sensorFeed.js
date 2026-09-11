@@ -5,8 +5,20 @@ import {
   normalise,
   extractCoords,
 } from './iotFeed.js';
+import { gpsPointForDevice, advanceGlobalIndex } from './gpsRoute.js';
 
 const SOURCE = process.env.SENSOR_DATA_SOURCE || 'mock';
+
+/** Board ids / names that should move on the Kochi↔Bengaluru demo path */
+function isGpsBoard(device) {
+  const id = String(device?.type || device?.boardId || '').toLowerCase();
+  const name = String(device?.name || device?.typeLabel || '').toLowerCase();
+  return (
+    id.includes('gps') ||
+    name.includes('gps') ||
+    id === 'gps-board'
+  );
+}
 
 // One profile per board type — this is the thing that varies across "many
 // different embedded boards": each type defines its own 6 sensor channels,
@@ -108,6 +120,30 @@ function formatReading(device) {
   if (!state.has(device.id)) initDevice(device, profile);
   const s = step(device, profile);
 
+  const sensors = profile.sensors.map((sensor) => ({
+    key: sensor.key,
+    label: sensor.label,
+    unit: sensor.unit,
+    value: Math.round(s.values[sensor.key] * 100) / 100,
+  }));
+
+  // GPS boards move along Kochi ↔ Bengaluru (and back) so the dashboard map animates
+  let latitude = null;
+  let longitude = null;
+  if (isGpsBoard(device)) {
+    advanceGlobalIndex();
+    const gps = gpsPointForDevice(device.id);
+    latitude = Number(gps.lat.toFixed(6));
+    longitude = Number(gps.lng.toFixed(6));
+    sensors.push(
+      { key: 'latitude', label: 'Latitude', unit: '°', value: latitude },
+      { key: 'longitude', label: 'Longitude', unit: '°', value: longitude }
+    );
+    // Keep GPS trackers marked online while simulating movement
+    s.online = true;
+    s.lastPing = new Date();
+  }
+
   return {
     id: device.id,
     name: device.name,
@@ -118,13 +154,10 @@ function formatReading(device) {
     lastPing: s.lastPing.toISOString(),
     serverTime: new Date().toISOString(),
     relays: s.relays.map((on, i) => ({ id: i + 1, state: on ? 'ON' : 'OFF' })),
-    sensors: profile.sensors.map((sensor) => ({
-      key: sensor.key,
-      label: sensor.label,
-      unit: sensor.unit,
-      value: Math.round(s.values[sensor.key] * 100) / 100,
-    })),
+    sensors,
     source: SOURCE === 'aws' ? 'aws' : 'simulated',
+    latitude,
+    longitude,
   };
 }
 

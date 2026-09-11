@@ -4,7 +4,7 @@ import { AdminAccount } from '../models/AdminAccount.js';
 import { logActivity } from '../middleware/activityLogger.js';
 import { sendUserWelcomeEmail } from '../services/emailService.js';
 
-const USER_LIST_FIELDS = 'name email phone status permissions lastLogin createdAt';
+const USER_LIST_FIELDS = 'name email phone status permissions lastLogin createdAt createdBy';
 
 function belongsToAdmin(user, admin) {
   return admin.role === 'Superadmin' || String(user.createdBy) === String(admin._id);

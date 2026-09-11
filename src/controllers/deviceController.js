@@ -118,8 +118,14 @@ export async function createDevice(req, res) {
   if (!name || !boardId || !imei) {
     return res.status(400).json({ error: 'name, boardId and imei are required' });
   }
-  if (!req.admin) {
-    return res.status(403).json({ error: 'Only admins can register devices' });
+
+  // Admin path: manageSensors (enforced by route). User path: addSensor (enforced by route).
+  const isUser = !!req.user && !req.admin;
+  if (isUser && !req.user.permissions?.addSensor) {
+    return res.status(403).json({ error: 'Missing permission: addSensor' });
+  }
+  if (!req.admin && !req.user) {
+    return res.status(403).json({ error: 'Forbidden' });
   }
 
   const board = await BoardCatalog.findOne({ id: boardId });
@@ -136,7 +142,7 @@ export async function createDevice(req, res) {
     String(process.env.SENSOR_DATA_SOURCE || '').toLowerCase() === 'aws';
 
   // Company admins must link a live AWS board when SENSOR_DATA_SOURCE=aws
-  if (requireAws && !awsId && req.admin.role !== 'Superadmin') {
+  if (requireAws && !awsId && req.admin && req.admin.role !== 'Superadmin') {
     return res.status(400).json({
       error:
         'Select a live AWS device. No simulated sensors are allowed while SENSOR_DATA_SOURCE=aws.',
@@ -179,36 +185,68 @@ export async function createDevice(req, res) {
     return Number.isFinite(n) ? n : null;
   };
 
-  const device = await Device.create({
-    name: name.trim(),
-    boardId,
-    imei: imei.trim(),
-    simNo: simNo?.trim() || '',
-    subscriptionPlan: subscriptionPlan?.trim() || '',
-    assignedUserId: assignedUserId || null,
-    awsDeviceId: awsId,
-    site: site?.trim() || '',
-    lat: parseCoord(lat),
-    lng: parseCoord(lng),
-    // Scope to the creating admin so other company admins do not see it
-    createdBy: req.admin._id,
-  });
-
-  if (device.awsDeviceId && device.lat != null && device.lng != null) {
-    await putDeviceLocation(device.awsDeviceId, {
-      lat: device.lat,
-      lng: device.lng,
-      site: device.site,
-    });
+  // Users who self-register a board are automatically assigned as the owner.
+  // Admins may optionally assign someone (or leave unassigned).
+  let finalAssignedUserId = assignedUserId || null;
+  let createdBy = null;
+  if (isUser) {
+    finalAssignedUserId = req.user._id;
+    createdBy = req.user.createdBy || null;
+  } else {
+    createdBy = req.admin._id;
   }
 
-  await logActivity(req, {
-    action: 'Registered device',
-    target: device.name,
-    targetType: 'sensor',
-    category: 'sensor',
-    severity: 'info',
-  });
+  let device;
+  try {
+    device = await Device.create({
+      name: name.trim(),
+      boardId,
+      imei: imei.trim(),
+      simNo: simNo?.trim() || '',
+      subscriptionPlan: subscriptionPlan?.trim() || '',
+      assignedUserId: finalAssignedUserId,
+      awsDeviceId: awsId,
+      site: site?.trim() || '',
+      lat: parseCoord(lat),
+      lng: parseCoord(lng),
+      // Scope to the creating admin so other company admins do not see it
+      createdBy,
+    });
+  } catch (err) {
+    // Race: two parallel creates with the same IMEI — unique index wins
+    if (err?.code === 11000 || /duplicate key/i.test(String(err?.message || ''))) {
+      return res.status(409).json({
+        error: 'A device with that IMEI is already registered',
+      });
+    }
+    console.error('[devices] create failed:', err.message);
+    return res.status(500).json({ error: err.message || 'Failed to register device' });
+  }
+
+  if (device.awsDeviceId && device.lat != null && device.lng != null) {
+    try {
+      await putDeviceLocation(device.awsDeviceId, {
+        lat: device.lat,
+        lng: device.lng,
+        site: device.site,
+      });
+    } catch (err) {
+      // Device is already saved — don't fail the request if AWS location write flakes
+      console.error('[devices] putDeviceLocation failed:', err.message);
+    }
+  }
+
+  try {
+    await logActivity(req, {
+      action: 'Registered device',
+      target: device.name,
+      targetType: 'sensor',
+      category: 'sensor',
+      severity: 'info',
+    });
+  } catch (err) {
+    console.error('[devices] logActivity failed:', err.message);
+  }
 
   res.status(201).json({
     device: device.toSafeJSON(),
@@ -219,8 +257,19 @@ export async function createDevice(req, res) {
 export async function updateDevice(req, res) {
   const device = await Device.findById(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found' });
-  if (req.admin && !canManageDevice(req, device)) {
-    return res.status(403).json({ error: 'Forbidden' });
+
+  const isAdminManager =
+    req.admin &&
+    (req.admin.role === 'Superadmin' || req.admin.permissions?.manageSensors) &&
+    canManageDevice(req, device);
+  const isOwningUser =
+    req.user &&
+    device.assignedUserId &&
+    String(device.assignedUserId) === String(req.user._id) &&
+    req.user.permissions?.editSensor;
+
+  if (!isAdminManager && !isOwningUser) {
+    return res.status(403).json({ error: 'Missing permission: manageSensors or editSensor' });
   }
 
   const { name, imei, simNo, subscriptionPlan, awsDeviceId, site, lat, lng } = req.body;
@@ -311,8 +360,19 @@ export async function assignDevice(req, res) {
 export async function removeDevice(req, res) {
   const device = await Device.findById(req.params.id);
   if (!device) return res.status(404).json({ error: 'Device not found' });
-  if (req.admin && !canManageDevice(req, device)) {
-    return res.status(403).json({ error: 'Forbidden' });
+
+  const isAdminManager =
+    req.admin &&
+    (req.admin.role === 'Superadmin' || req.admin.permissions?.manageSensors) &&
+    canManageDevice(req, device);
+  const isOwningUser =
+    req.user &&
+    device.assignedUserId &&
+    String(device.assignedUserId) === String(req.user._id) &&
+    req.user.permissions?.removeSensor;
+
+  if (!isAdminManager && !isOwningUser) {
+    return res.status(403).json({ error: 'Missing permission: manageSensors or removeSensor' });
   }
 
   await device.deleteOne();

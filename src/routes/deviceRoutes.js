@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
-import { requirePermission } from '../middleware/rbac.js';
+import { requirePermission, requireEitherPermission } from '../middleware/rbac.js';
 
 import {
   listRegisteredDevices,
@@ -39,7 +39,11 @@ router.get(
 
 
 // ─────────────────────────────────────────────
-// ADMIN SENSOR APIs
+// ADMIN + USER SENSOR APIs
+// Write operations accept either an admin with
+// manageSensors or a User with the matching
+// fleet permission (add/edit/remove). Controllers
+// enforce ownership for the User path.
 // ─────────────────────────────────────────────
 
 router.get(
@@ -62,13 +66,13 @@ router.get(
 
 router.post(
   '/',
-  requirePermission('manageSensors'),
+  requireEitherPermission({ admin: 'manageSensors', user: 'addSensor' }),
   createDevice
 );
 
 router.patch(
   '/:id',
-  requirePermission('manageSensors'),
+  requireEitherPermission({ admin: 'manageSensors', user: 'editSensor' }),
   updateDevice
 );
 
@@ -79,7 +83,7 @@ router.patch(
 
 router.delete(
   '/:id',
-  requirePermission('manageSensors'),
+  requireEitherPermission({ admin: 'manageSensors', user: 'removeSensor' }),
   removeDevice
 );
 

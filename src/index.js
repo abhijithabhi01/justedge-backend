@@ -8,7 +8,7 @@ import compression from 'compression';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import mongoose from 'mongoose';
-import { connectDB } from './config/db.js';
+import { connectDB, isDbReady } from './config/db.js';
 import demoRoutes from './routes/demoRoutes.js';
 import { startDemoSensorSimulator } from './services/demoSensorSimulator.js';
 
@@ -16,6 +16,48 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 4000;
 
 const DB_STATES = { 0: 'disconnected', 1: 'connected', 2: 'connecting', 3: 'disconnecting' };
+
+// Transient Atlas / DNS / network errors must not kill the process.
+// Mongoose will keep retrying; nodemon would otherwise sit on "app crashed".
+function isTransientMongoError(err) {
+  if (!err) return false;
+  const msg = String(err.message || err);
+  const name = String(err.name || '');
+  return (
+    name === 'MongoServerSelectionError' ||
+    name === 'MongoNetworkError' ||
+    name === 'MongoNetworkTimeoutError' ||
+    name === 'MongoTimeoutError' ||
+    /ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ReplicaSetNoPrimary|server selection timed out/i.test(
+      msg
+    )
+  );
+}
+
+function isBenignMongoError(err) {
+  if (!err) return false;
+  // Duplicate key (E11000) should be handled in controllers; if it leaks, don't crash.
+  if (err.code === 11000) return true;
+  return /duplicate key/i.test(String(err.message || ''));
+}
+
+process.on('unhandledRejection', (reason) => {
+  if (isTransientMongoError(reason) || isBenignMongoError(reason)) {
+    console.error('[process] handled rejection (ignored):', reason?.message || reason);
+    return;
+  }
+  console.error('[process] unhandledRejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  if (isTransientMongoError(err) || isBenignMongoError(err)) {
+    console.error('[process] handled exception (ignored):', err.message);
+    return;
+  }
+  console.error('[process] uncaughtException:', err);
+  // Non-Mongo fatal errors still exit so nodemon can restart cleanly
+  process.exit(1);
+});
 
 import { requireAuth } from './middleware/auth.js';
 import authRoutes from './routes/authRoutes.js';
@@ -58,7 +100,12 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false }));
 app.use('/api', rateLimit({ windowMs: 15 * 60 * 1000, max: 600, standardHeaders: true, legacyHeaders: false }));
 app.use('/api/demo', demoRoutes);
-app.get('/health', (req, res) => res.json({ ok: true }));
+app.get('/health', (req, res) =>
+  res.json({
+    ok: true,
+    db: DB_STATES[mongoose.connection.readyState] || 'unknown',
+  })
+);
 
 // Detailed runtime diagnostics (uptime, env, Node/DB info) — behind auth so
 // this isn't handed to anyone who can reach the port. The public status
@@ -72,6 +119,24 @@ app.get('/api/system/status', requireAuth, (req, res) => res.json({
   db: { state: DB_STATES[mongoose.connection.readyState] || 'unknown' },
   timestamp: new Date().toISOString(),
 }));
+
+// Soft-fail API routes when Mongo is briefly offline (e.g. Wi‑Fi blip)
+app.use('/api', (req, res, next) => {
+  // Always allow auth health-style paths that do not need DB? Login needs DB.
+  if (!isDbReady() && req.path !== '/system/status') {
+    // /api prefix is already stripped by this mount? Actually app.use('/api', ...)
+    // sees path relative to mount: e.g. /auth/login
+    // Allow nothing that needs DB — return 503 so the UI can show a clear message.
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        error:
+          'Database temporarily unavailable. Check your network and MongoDB Atlas status, then try again.',
+        db: DB_STATES[mongoose.connection.readyState] || 'unknown',
+      });
+    }
+  }
+  next();
+});
 
 app.use('/api/auth', authRoutes);
 app.use('/api/admins', adminRoutes);
