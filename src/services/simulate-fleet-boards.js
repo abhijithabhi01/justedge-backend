@@ -200,8 +200,8 @@ const TEMP_BOARDS = [
   {
     id: 'TEMP_BOARD_01',
     site: 'Bengaluru Warehouse A',
-    lat: 12.9716,
-    lng: 77.5946,
+    lat: 15.1300653,
+    lng: 76.8773009,
     baseTemp: 24.5,
   },
   {

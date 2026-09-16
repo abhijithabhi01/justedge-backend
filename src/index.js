@@ -11,6 +11,7 @@ import mongoose from 'mongoose';
 import { connectDB, isDbReady } from './config/db.js';
 import demoRoutes from './routes/demoRoutes.js';
 import { startDemoSensorSimulator } from './services/demoSensorSimulator.js';
+import { startFleetSimulator } from './services/fleetSimulator.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 4000;
@@ -164,5 +165,6 @@ connectDB().then(() => {
   app.listen(PORT, () => {
     console.log(`[server] listening on :${PORT}`);
     startDemoSensorSimulator();
+    startFleetSimulator();
   });
 });
