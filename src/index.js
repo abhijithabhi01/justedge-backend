@@ -12,6 +12,7 @@ import { connectDB, isDbReady } from './config/db.js';
 import demoRoutes from './routes/demoRoutes.js';
 import { startDemoSensorSimulator } from './services/demoSensorSimulator.js';
 import { startFleetSimulator } from './services/fleetSimulator.js';
+import { startAutomationEngine } from './services/automationEngine.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 4000;
@@ -166,5 +167,6 @@ connectDB().then(() => {
     console.log(`[server] listening on :${PORT}`);
     startDemoSensorSimulator();
     startFleetSimulator();
+    startAutomationEngine();
   });
 });

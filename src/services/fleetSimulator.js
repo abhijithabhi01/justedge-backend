@@ -101,12 +101,17 @@ function buildRoundTrip(waypoints) {
 }
 
 function makeGpsBoard(id, label, routeLabel, waypoints) {
+  const origin = waypoints[0]?.name || 'Origin';
+  const destination = waypoints[waypoints.length - 1]?.name || 'Destination';
   return {
     id,
     label,
     routeLabel,
+    origin,
+    destination,
     path: buildRoundTrip(waypoints),
     index: 0,
+    battery: 100, // drains 100 → 15 then resets
   };
 }
 
@@ -159,9 +164,20 @@ async function tickGps(board) {
   const jitterLng = (Math.random() - 0.5) * 0.001;
   const lat = Number((p.lat + jitterLat).toFixed(6));
   const lng = Number((p.lng + jitterLng).toFixed(6));
-  const progress = (board.index % board.path.length) / board.path.length;
-  const battery = Math.max(35, Math.round(92 - progress * 25));
   const ts = String(Date.now());
+
+  // Battery: 100% → 15% in steps, then reset to 100
+  if (board.battery == null) board.battery = 100;
+  board.battery = Math.max(15, board.battery - 5);
+  const battery = board.battery;
+  if (board.battery <= 15) board.battery = 100;
+
+  // Journey phase from route direction + leg
+  let journeyPhase = 'en_route';
+  if (p.direction === 'outbound' && p.leg === board.origin) journeyPhase = 'started';
+  else if (p.direction === 'outbound' && p.leg === board.destination) journeyPhase = 'arrived';
+  else if (p.direction === 'return' && p.leg === board.origin) journeyPhase = 'returned';
+  else if (p.direction === 'return') journeyPhase = 'returning';
 
   await putItem({
     [KEY]: board.id,
@@ -180,6 +196,9 @@ async function tickGps(board) {
     route: board.routeLabel,
     direction: p.direction,
     leg: p.leg,
+    origin: board.origin,
+    destination: board.destination,
+    journeyPhase,
     seq: (board.index % board.path.length) + 1,
     total_points: board.path.length,
   });
@@ -259,7 +278,7 @@ export function startFleetSimulator() {
     KEY = 'deviceId';
   }
 
-  const intervalMs = Number(process.env.FLEET_SIMULATOR_INTERVAL_MS || 3000);
+  const intervalMs = Number(process.env.FLEET_SIMULATOR_INTERVAL_MS || 5000);
 
   const run = () => {
     tickAll().catch((err) => console.error('[fleet-sim] tick failed:', err.message));

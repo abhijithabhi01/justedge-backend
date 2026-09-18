@@ -1,6 +1,12 @@
 import { Alert } from '../models/Alert.js';
 import { logActivity } from '../middleware/activityLogger.js';
 
+function assertAlertAccess(req, alert) {
+  if (req.admin) return true;
+  if (req.user && String(alert.ownerId) === String(req.user._id)) return true;
+  return false;
+}
+
 export async function listAlerts(req, res) {
   const { resolved, ownerId, page = 1, pageSize = 50 } = req.query;
   const filter = {};
@@ -27,6 +33,8 @@ export async function resolveAlert(req, res) {
   const alert = await Alert.findById(req.params.id);
   if (!alert) return res.status(404).json({ error: 'Alert not found' });
 
+  if (!assertAlertAccess(req, alert)) return res.status(403).json({ error: 'Forbidden' });
+
   alert.resolved = true;
   await alert.save();
 
@@ -37,6 +45,8 @@ export async function resolveAlert(req, res) {
 export async function snoozeAlert(req, res) {
   const alert = await Alert.findById(req.params.id);
   if (!alert) return res.status(404).json({ error: 'Alert not found' });
+
+  if (!assertAlertAccess(req, alert)) return res.status(403).json({ error: 'Forbidden' });
 
   const { until } = req.body;
   alert.snoozedUntil = until ? new Date(until) : null;
@@ -49,6 +59,8 @@ export async function snoozeAlert(req, res) {
 export async function dismissAlert(req, res) {
   const alert = await Alert.findById(req.params.id);
   if (!alert) return res.status(404).json({ error: 'Alert not found' });
+
+  if (!assertAlertAccess(req, alert)) return res.status(403).json({ error: 'Forbidden' });
 
   await alert.deleteOne();
   await logActivity(req, { action: 'Dismissed alert', target: alert.title, targetType: 'alert', category: 'sensor', severity: 'info' });

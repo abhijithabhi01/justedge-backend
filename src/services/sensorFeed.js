@@ -5,7 +5,11 @@ import {
   normalise,
   extractCoords,
 } from './iotFeed.js';
-import { gpsPointForDevice, advanceGlobalIndex } from './gpsRoute.js';
+import {
+  gpsPointForDevice,
+  advanceGlobalIndex,
+  routeForDevice,
+} from './gpsRoute.js';
 
 const SOURCE = process.env.SENSOR_DATA_SOURCE || 'mock';
 
@@ -131,8 +135,9 @@ function formatReading(device) {
   let latitude = null;
   let longitude = null;
   if (isGpsBoard(device)) {
-    advanceGlobalIndex();
-    const gps = gpsPointForDevice(device.id);
+    const route = routeForDevice(device.name || device.id);
+    advanceGlobalIndex(route);
+    const gps = gpsPointForDevice(device.id, { route });
     latitude = Number(gps.lat.toFixed(6));
     longitude = Number(gps.lng.toFixed(6));
     sensors.push(
@@ -275,13 +280,17 @@ async function getCachedAwsReading(deviceLite) {
       telemetryItem: item,
     });
 
+    const batteryFromItem =
+      item?.battery != null && Number.isFinite(Number(item.battery))
+        ? Number(item.battery)
+        : null;
     const data = {
       id: deviceLite.id,
       name: deviceLite.name,
       type: deviceLite.type,
       typeLabel: deviceLite.typeLabel || 'AWS Board',
       status,
-      battery: battSensor ? battSensor.value : null,
+      battery: battSensor ? battSensor.value : batteryFromItem,
       lastPing: reading?.recordedAt || null,
       serverTime: new Date().toISOString(),
       relays: [],
@@ -289,6 +298,13 @@ async function getCachedAwsReading(deviceLite) {
       source: 'aws',
       latitude: latSensor ? latSensor.value : (reading?.latitude ?? null),
       longitude: lngSensor ? lngSensor.value : (reading?.longitude ?? null),
+      // Journey metadata for automation engine (fleet GPS simulators)
+      leg: item?.leg || item?.site || null,
+      direction: item?.direction || null,
+      origin: item?.origin || null,
+      destination: item?.destination || null,
+      journeyPhase: item?.journeyPhase || null,
+      route: item?.route || null,
     };
 
     awsReadingCache.set(key, { data, expires: now + CACHE_TTL_MS });
